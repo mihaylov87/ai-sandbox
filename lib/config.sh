@@ -31,6 +31,18 @@ ais_resolve_maybe() {
   fi
 }
 
+# printf %q for values that are eval'd back. Bash 3.2's %q leaves '~' unescaped, so the
+# eval would tilde-expand it (turning '~root/x' into a path instead of rejecting it).
+# Sets AIS_Q (no subshell: it runs for every variable at start).
+ais_q() {
+  printf -v AIS_Q %q "$1"
+  [ "$_AIS_Q_TILDE" = 1 ] && AIS_Q=${AIS_Q//\~/\\~}
+  return 0
+}
+_AIS_Q_TILDE=0
+printf -v AIS_Q %q '~'
+[ "$AIS_Q" = '~' ] && _AIS_Q_TILDE=1
+
 # ---------------------------------------------------------------------------
 # Variables (spec §6 table)
 
@@ -101,8 +113,8 @@ cfg_read_file() {
     . "$f" >&2 || exit 1
     for v in $(compgen -v AI_SANDBOX_); do
       case "$(declare -p "$v" 2>/dev/null)" in
-        "declare -"[aA]*) printf 'ARRAY %s\n' "$v" ;;
-        *) printf '%s=%q\n' "$v" "${!v}" ;;
+        ("declare -"[aA]*) printf 'ARRAY %s\n' "$v" ;;
+        (*) ais_q "${!v}"; printf '%s=%s\n' "$v" "$AIS_Q" ;;
       esac
     done
   ) || ais_die 125 "error while reading config file $f"
@@ -352,7 +364,7 @@ cfg_apply_cli() {
 cfg_load() {
   local env_lines env_work conf_dir global candidate f pw
   # 5. Snapshot the calling environment before defaults overwrite it.
-  env_lines=$(for v in $(compgen -v AI_SANDBOX_); do printf '%s=%q\n' "$v" "${!v}"; done)
+  env_lines=$(for v in $(compgen -v AI_SANDBOX_); do ais_q "${!v}"; printf '%s=%s\n' "$v" "$AIS_Q"; done)
   env_work=${AI_SANDBOX_WORK_DIR-}
 
   cli_parse "$@"
