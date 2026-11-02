@@ -279,6 +279,19 @@ class LiveProxyTest(unittest.TestCase):
         s, head = self.connect_tunnel("127.0.0.1:%d" % self.port)
         self.assertTrue(head.startswith("HTTP/1.1 200"), head)
 
+    def test_unix_socket_path_longer_than_sun_path_limit(self):
+        deep = os.path.join(self.tmp, "d" * 60, "e" * 60)
+        os.makedirs(deep)
+        path = os.path.join(deep, "proxy.sock")
+        self.assertGreater(len(path), 110)
+        line = self.start(listen="unix:" + path)
+        self.assertEqual(line, "READY unix:" + path)
+        self.assertTrue(os.path.exists(path))
+        s = net.connect_to("unix:" + path)
+        s.sendall(("CONNECT 127.0.0.1:%d HTTP/1.1\r\n\r\n" % self.port).encode())
+        self.assertTrue(s.recv(64).startswith(b"HTTP/1.1 200"))
+        s.close()
+
     def test_tunnel_limit_replies_503(self):
         self.start(extra=["--max-tunnels", "1"])
         s1, h1 = self.connect_tunnel("127.0.0.1:%d" % self.port)

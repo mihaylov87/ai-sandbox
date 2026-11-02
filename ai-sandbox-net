@@ -191,6 +191,21 @@ def is_private(ip_text):
 # ---------------------------------------------------------------------------
 # Sockets
 
+def _unix_op(sock, path, op):
+    """bind/connect a Unix socket. Paths longer than sun_path (104-108 bytes) are reached
+    through their directory: chdir there and use the basename, then chdir back."""
+    if len(path.encode()) < 100:
+        getattr(sock, op)(path)
+        return
+    cwd = os.open(".", os.O_RDONLY)
+    try:
+        os.chdir(os.path.dirname(path) or ".")
+        getattr(sock, op)(os.path.basename(path))
+    finally:
+        os.fchdir(cwd)
+        os.close(cwd)
+
+
 def listen_on(spec):
     """unix:PATH or tcp:HOST:PORT (loopback only) -> (socket, address text)."""
     if spec.startswith("unix:"):
@@ -200,7 +215,7 @@ def listen_on(spec):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         old = os.umask(0o177)
         try:
-            s.bind(path)
+            _unix_op(s, path, "bind")
         finally:
             os.umask(old)
         s.listen(128)
@@ -221,7 +236,7 @@ def connect_to(spec, timeout=CONNECT_TIMEOUT):
     if spec.startswith("unix:"):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(timeout)
-        s.connect(spec[5:])
+        _unix_op(s, spec[5:], "connect")
     else:
         host, port = spec.rsplit(":", 1)
         s = socket.create_connection((host, int(port)), timeout=timeout)
