@@ -49,6 +49,8 @@ if [ "$stub" = 1 ]; then
   cp "$root/tests/unit/backend-stub.sh" "$inst/tests/unit/"
   export _AIS_TEST_BACKEND=stub
 fi
+cp "$root"/profiles/*.sh "$inst/profiles/"
+cp -R "$root/seeds" "$inst/"
 cat >"$inst/profiles/fixture.sh" <<'EOF'
 # Test profile: isolated state dir with one locked guardrail file.
 PROFILE_RW=(".")

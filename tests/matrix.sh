@@ -4,7 +4,8 @@
 #
 # Each check is a `row` call:
 #   row <id> <linux|macos|both> <gate|-> <allowed|denied|skip:reason> <description> \
-#       [--raw] [launcher options...] -- <command> [args...]
+#       [--raw] [--with-secrets] [launcher options...] -- <command> [args...]
+# --with-secrets resolves the profile's secrets for this row (H1); others run without.
 # --raw execs the command directly instead of through `sh -c` (which adds PWD to the
 # environment); it must then exit 0 or 1 itself. `hostrow` runs a check on the host:
 #   hostrow <id> <linux|macos|both> <gate|-> <description> -- <command> [args...]
@@ -27,19 +28,25 @@ CHK_ERRF=$(mktemp)
 # Children: no secrets needed (stub command), and gates are measured, not applied.
 export _AIS_NO_SECRETS=1 _AIS_CHECK_NO_GATES=1
 
-_chk_gate() { # gate pass|fail
-  local cur
+_chk_gate() { # gate[,gate...] pass|fail
+  local cur g
   [ "$1" = - ] && return 0
-  eval "cur=\${_CHK_GATE_$1-}"
-  if [ "$2" = fail ] || [ -z "$cur" ]; then eval "_CHK_GATE_$1=\$2"; fi
+  for g in $(printf '%s' "$1" | tr ',' ' '); do
+    eval "cur=\${_CHK_GATE_$g-}"
+    if [ "$2" = fail ] || [ -z "$cur" ]; then eval "_CHK_GATE_$g=\$2"; fi
+  done
 }
 
 row() {
   local id=$1 plat=$2 gate=$3 expect=$4 desc=$5 label rc got
   shift 5
-  local largs=() raw=0
+  local largs=() raw=0 nosecrets=1
   while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
-    if [ "$1" = --raw ]; then raw=1; else largs[${#largs[@]}]=$1; fi
+    case "$1" in
+      --raw) raw=1 ;;
+      --with-secrets) nosecrets=0 ;;
+      *) largs[${#largs[@]}]=$1 ;;
+    esac
     shift
   done
   [ "$#" -gt 0 ] && shift
@@ -64,7 +71,7 @@ row() {
       ;;
   esac
 
-  "$LAUNCHER" -H "$CHK_PROFILE" -w "$CHK_WORK_DIR" ${CHK_PROJECT:+-p "$CHK_PROJECT"} \
+  _AIS_NO_SECRETS=$nosecrets "$LAUNCHER" -H "$CHK_PROFILE" -w "$CHK_WORK_DIR" ${CHK_PROJECT:+-p "$CHK_PROJECT"} \
     ${CHK_NET:+--net "$CHK_NET"} ${largs[@]+"${largs[@]}"} \
     -- "$@" </dev/null >/dev/null 2>"$CHK_ERRF"
   rc=$?
@@ -215,7 +222,8 @@ matrix_rows() {
     row F9 both G5 denied "rename a file onto .git/config" -- \
       sh -c 't="$1/.git/ais-chk.$$"; : >"$t" || exit 0; mv -f "$t" "$1/.git/config"; r=$?; rm -f "$t"; exit $r' _ "$CHK_REPO"
     row F10 both - allowed "git add and git commit" -- \
-      sh -c 'cd "$1" && echo "$$" >f && git add f && git -c user.name=chk -c user.email=chk@invalid commit -qm chk' _ "$CHK_REPO"
+      sh -c 'cd "$1" && echo "$2" >f && git add f && git -c user.name=chk -c user.email=chk@invalid commit -qm chk' \
+      _ "$CHK_REPO" "$CHK_PROFILE-$(date +%s)-$RANDOM"
   else
     row F9 both - skip:"git not installed" "write Git internals" -- true
     row F10 both - skip:"git not installed" "git add and commit" -- true
@@ -262,7 +270,31 @@ sys.exit(0)'
     row I9 both G2 skip:"no controlling terminal; run --check from a terminal" "TIOCSTI injection" -- true
   fi
 
+  _chk_h1
   _chk_net_rows
+}
+
+# H1 (spec §13): the real harness, with a real token, once per profile. Runs only when the
+# profile's secrets resolve; otherwise SKIP and the profile counts as untested.
+_chk_h1() {
+  local bin gates prompt
+  case "$CHK_PROFILE" in
+    claude) gates=G7,G8,G9,G10; prompt=(claude --dangerously-skip-permissions -p "Reply with the single word OK") ;;
+    copilot) gates=G6,G8,G9,G10; prompt=(copilot --autopilot --allow-all -p "Reply with the single word OK") ;;
+    generic)
+      row H1 both - skip:"generic has no harness; set AI_SANDBOX_COMMAND and smoke-test it by hand" "harness smoke test" -- true
+      return 0
+      ;;
+    *) return 0 ;;
+  esac
+  bin=${prompt[0]}
+  if ! _AIS_NO_SECRETS=0 "$LAUNCHER" -H "$CHK_PROFILE" -w "$CHK_WORK_DIR" ${CHK_PROJECT:+-p "$CHK_PROJECT"} \
+      --dry-run -- true >/dev/null 2>&1; then
+    row H1 both "$gates" skip:"secrets of profile $CHK_PROFILE do not resolve; profile untested" "harness smoke test" -- true
+    return 0
+  fi
+  row H1 both "$gates" allowed "$bin --version" --with-secrets -- "$bin" --version
+  row H1 both "$gates" allowed "one prompt round trip" --with-secrets -- "${prompt[@]}"
 }
 
 # Expected result for the current network mode: _chk_mode <allowlist> <none> <open>

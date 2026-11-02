@@ -400,16 +400,68 @@ cfg_load() {
 # Harness profile (spec §11): one Bash file in $AIS_INSTALL_DIR/profiles/.
 # Sets the PROFILE_* variables and AIS_STATE_DIR (effective state dir).
 
+# For profiles: did a verification gate fail on this system? (spec §15)
+profile_gate_failed() { # gate
+  declare -F gates_status >/dev/null || return 1
+  [ "$(gates_status "$1")" = fail ]
+}
+
 cfg_load_profile() {
   local f="${AIS_INSTALL_DIR:?AIS_INSTALL_DIR not set}/profiles/$AI_SANDBOX_HARNESS.sh"
   [ -f "$f" ] || ais_die 125 "harness profile '$AI_SANDBOX_HARNESS' not found: $f"
   PROFILE_COMMAND=() PROFILE_STATE_ENV= PROFILE_STATE_DIR= PROFILE_RW=() PROFILE_RO=()
   PROFILE_LOCKED=() PROFILE_SECRETS=() PROFILE_ENV=() PROFILE_PASS_ENV=() PROFILE_NET_ALLOW=()
   PROFILE_PATH_ADD=() PROFILE_ALLOW_USERNS=0
+  unset -f profile_preflight profile_seed_extra 2>/dev/null || true
+  # Profiles may consult gate results (G6, G7, G9), so read them first.
+  if declare -F gates_read >/dev/null; then gates_read; fi
   . "$f" || ais_die 125 "error while loading harness profile $f"
   if [ "$AI_SANDBOX_STATE" = shared ]; then
     AIS_STATE_DIR=$PROFILE_STATE_DIR
   else
     AIS_STATE_DIR="$HOME/.local/state/ai-sandbox/$AI_SANDBOX_HARNESS"
   fi
+}
+
+# Isolated state (spec §11): every PROFILE_LOCKED entry is copied at every start from
+# ~/.config/ai-sandbox/seed/<harness>/, else seeds/<harness>/ in the install dir, so the
+# seed on the host is the only source of truth for guardrails. An entry absent from both
+# seeds is removed from the state dir, so a guardrail file the agent created in an earlier
+# session cannot become a locked guardrail later. Shared mode: no seeding.
+profile_seed() {
+  local e src user="$HOME/$AIS_CONFIG_DIR_REL/seed/$AI_SANDBOX_HARNESS" inst="$AIS_INSTALL_DIR/seeds/$AI_SANDBOX_HARNESS" p
+  # Launcher-owned cache dirs a profile lists as required RW paths.
+  for p in ${PROFILE_RW[@]+"${PROFILE_RW[@]}"}; do
+    case "$p" in "$HOME/.cache/ai-sandbox/"*[!?]) mkdir -p "$p" ;; esac
+  done
+  [ "$AI_SANDBOX_STATE" = isolated ] || return 0
+  [ "${#PROFILE_LOCKED[@]}" -gt 0 ] || [ -n "$PROFILE_STATE_ENV" ] || return 0
+  mkdir -p "$AIS_STATE_DIR"
+  chmod 0700 "$AIS_STATE_DIR"
+  for e in ${PROFILE_LOCKED[@]+"${PROFILE_LOCKED[@]}"}; do
+    case "$e" in /* | *..*) ais_die 125 "profile $AI_SANDBOX_HARNESS: locked entry '$e' must be relative to the state dir" ;; esac
+    src=
+    if [ -e "$user/$e" ]; then src="$user/$e"; elif [ -e "$inst/$e" ]; then src="$inst/$e"; fi
+    rm -rf "${AIS_STATE_DIR:?}/$e"
+    if [ -n "$src" ]; then
+      mkdir -p "$(dirname "$AIS_STATE_DIR/$e")"
+      cp -R "$src" "$AIS_STATE_DIR/$e"
+    fi
+  done
+  if declare -F profile_seed_extra >/dev/null; then profile_seed_extra; fi
+}
+
+# profile_preflight (optional, from the profile) runs with the built environment visible;
+# non-zero exits 125. Skipped for matrix checks, which resolve no secrets.
+profile_preflight_check() {
+  declare -F profile_preflight >/dev/null || return 0
+  [ "${_AIS_NO_SECRETS-}" = 1 ] && return 0
+  (
+    i=0
+    while [ "$i" -lt "${#AIS_ENV_K[@]}" ]; do
+      export "${AIS_ENV_K[$i]}=${AIS_ENV_V[$i]}"
+      i=$((i + 1))
+    done
+    profile_preflight
+  ) || ais_die 125 "profile preflight failed for harness $AI_SANDBOX_HARNESS (see profiles/$AI_SANDBOX_HARNESS.sh; for claude: set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY via a secret)"
 }

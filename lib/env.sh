@@ -158,6 +158,9 @@ env_build() {
     fi
   fi
 
+  if [ -n "$PROFILE_STATE_ENV" ] && [ "$AI_SANDBOX_STATE" = isolated ]; then
+    env_set "$PROFILE_STATE_ENV" "$AIS_STATE_DIR"
+  fi
   for e in ${PROFILE_ENV[@]+"${PROFILE_ENV[@]}"}; do env_set "${e%%=*}" "${e#*=}"; done
   env_secrets
 }

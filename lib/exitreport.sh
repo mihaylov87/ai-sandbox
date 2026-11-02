@@ -187,7 +187,10 @@ EOF
         < <(find "$r" -maxdepth 4 -name .git -type d -prune -print0 2>/dev/null)
     done
   fi
-  always=(${always[@]+"${always[@]}"} ${EXITREPORT_ALWAYS_DIFF[@]+"${EXITREPORT_ALWAYS_DIFF[@]}"})
+  for g in ${EXITREPORT_ALWAYS_DIFF[@]+"${EXITREPORT_ALWAYS_DIFF[@]}"}; do
+    case "$g" in /*) ;; *) g="$AIS_STATE_DIR/$g" ;; esac # profile entries: relative to the state dir
+    always[${#always[@]}]=$g
+  done
   "$AIS_PYTHON" -I -c "$_EXITREPORT_PY" start "$AIS_SESSION_DIR/manifest.start" "$AIS_SESSION_DIR" \
     "${#roots[@]}" ${roots[@]+"${roots[@]}"} ${always[@]+"${always[@]}"}
 }

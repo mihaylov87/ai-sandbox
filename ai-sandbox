@@ -70,7 +70,7 @@ AIS_PYTHON=$(command -v python3 2>/dev/null) || ais_die 126 "python3 (3.9+) not 
 
 cfg_load "$@"
 cfg_load_profile
-ais_hook profile_preflight_check
+profile_seed
 
 # The command to run: CLI > AI_SANDBOX_COMMAND > profile; --shell runs bash.
 AIS_CMD=()
@@ -127,7 +127,7 @@ trap _ais_cleanup EXIT
 # Step 4: IR (and environment, WP5).
 
 policy_build "$AIS_SESSION_DIR/policy.ir"
-case "$CLI_MODE" in print-policy | check) ;; *) ais_hook env_build ;; esac
+case "$CLI_MODE" in print-policy | check) ;; *) ais_hook env_build; profile_preflight_check ;; esac
 
 # Working directory inside: the caller's cwd if it is rw, ro or locked, else the work dir.
 AIS_CWD=$(pwd -P)

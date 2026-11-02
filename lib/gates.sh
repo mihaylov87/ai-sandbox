@@ -30,6 +30,8 @@ gates_read() {
   local f g status date os current
   f=$(gates_file)
   for g in $CFG_GATES; do eval "_AIS_GATE_$g="; done
+  # --check measures the defaults, so its sandboxes see no recorded results.
+  [ "${_AIS_CHECK_NO_GATES-}" = 1 ] && return 0
   [ -f "$f" ] || return 0
   current=$(gates_os_version)
   while read -r g status date os; do
