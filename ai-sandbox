@@ -126,7 +126,7 @@ trap _ais_cleanup EXIT
 # Step 4: IR (and environment, WP5).
 
 policy_build "$AIS_SESSION_DIR/policy.ir"
-ais_hook env_build
+[ "$CLI_MODE" = print-policy ] || ais_hook env_build
 
 # Working directory inside: the caller's cwd if it is rw, ro or locked, else the work dir.
 AIS_CWD=$(pwd -P)
@@ -200,8 +200,12 @@ trap '_ais_forward HUP' HUP
 AIS_EXEC_PY='import os,signal,sys
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+env = os.environ
+keep = env.get("_AIS_KEEP_ENV")
+if keep is not None:
+    env = dict((k, env[k]) for k in keep.split() if k in env)
 try:
-    os.execvp(sys.argv[1], sys.argv[1:])
+    os.execvpe(sys.argv[1], sys.argv[1:], env)
 except FileNotFoundError:
     sys.stderr.write("ai-sandbox: command not found: %s\n" % sys.argv[1]); sys.exit(127)
 except PermissionError:
