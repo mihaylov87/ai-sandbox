@@ -512,6 +512,7 @@ class Proxy(object):
         t0 = time.time()
         rec = {"verdict": "error", "method": "", "host": "", "port": 0, "ip": "", "up": 0, "down": 0}
         counted = False
+        logged = False
         up_sock = None
         try:
             conn.settimeout(30)
@@ -535,6 +536,11 @@ class Proxy(object):
             verdict, addrs, msg = self.decide(host, port, method == "CONNECT")
             rec["verdict"] = verdict
             if verdict.startswith("deny"):
+                # Logged before the reply: a client that exits on the 403 can end the session
+                # (and the proxy) before the finally clause would run.
+                rec["ms"] = int((time.time() - t0) * 1000)
+                self.log(rec)
+                logged = True
                 send_status(conn, 403, msg)
                 return
             if verdict == "error":
@@ -599,7 +605,8 @@ class Proxy(object):
                         pass
             rec["ms"] = int((time.time() - t0) * 1000)
             try:
-                self.log(rec)
+                if not logged:
+                    self.log(rec)
             except OSError:
                 pass
 
