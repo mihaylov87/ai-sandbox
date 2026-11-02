@@ -82,8 +82,18 @@ See `config.example` and spec section 6 for every variable. The most used:
 | `AI_SANDBOX_SECRET_CMD_<VAR>` | Host command whose output becomes `<VAR>` inside |
 | `AI_SANDBOX_STATE` | `isolated` (default): harness state in `~/.local/state/ai-sandbox/<harness>/` |
 
-Everything under `$HOME` is hidden unless listed. Harness binaries and runtimes installed in
-your home (for example `~/.local/bin`, `~/.nvm`) must be listed in `AI_SANDBOX_RO_PATHS`.
+Everything under `$HOME` is hidden unless listed. A harness or runtime installed in your
+home must be exposed by its real install path and run by its full path: symlinks such as
+`~/.local/bin/claude` are not recreated inside, and hidden directories on `PATH` stay empty.
+The launcher warns at start when the command would not be reachable. For example:
+
+```sh
+AI_SANDBOX_RO_PATHS=~/.local/share/claude
+AI_SANDBOX_COMMAND="$HOME/.local/share/claude/versions/2.1.316 --dangerously-skip-permissions"
+# Copilot installed with nvm: expose node and the package, run node's copilot by full path
+AI_SANDBOX_RO_PATHS=~/.nvm/versions/node/v22.23.3
+AI_SANDBOX_COMMAND="$HOME/.nvm/versions/node/v22.23.3/bin/copilot --autopilot --allow-all"
+```
 
 ## Credentials
 

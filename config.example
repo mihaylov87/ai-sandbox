@@ -9,6 +9,9 @@ AI_SANDBOX_WORK_DIR=~/src/app
 
 # Harness profile: copilot | claude | generic
 AI_SANDBOX_HARNESS=claude
+# A harness installed under $HOME is hidden inside: list its real install dir in
+# AI_SANDBOX_RO_PATHS and give its full path here (symlinks are not recreated inside), e.g.
+#AI_SANDBOX_COMMAND="$HOME/.local/share/claude/versions/2.1.316 --dangerously-skip-permissions"
 
 # Extra paths, colon-separated. A trailing "?" marks an optional RW path.
 AI_SANDBOX_RO_PATHS=~/.gitconfig:~/.ssh/known_hosts

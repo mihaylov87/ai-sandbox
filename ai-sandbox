@@ -133,6 +133,8 @@ case "$CLI_MODE" in run | shell) ais_hook net_launch ;; esac
 policy_build "$AIS_SESSION_DIR/policy.ir"
 case "$CLI_MODE" in print-policy | check) ;; *) ais_hook env_build; profile_preflight_check ;; esac
 
+case "$CLI_MODE" in run | shell | dry-run) policy_command_hint "${AIS_CMD[0]}" ;; esac
+
 # Working directory inside: the caller's cwd if it is rw, ro or locked, else the work dir.
 AIS_CWD=$(pwd -P)
 case "$(policy_class_of "$AIS_CWD")" in
