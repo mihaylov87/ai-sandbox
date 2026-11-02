@@ -153,8 +153,9 @@ case "$CLI_MODE" in
     exit 0
     ;;
   dry-run)
+    printf '# policy\n'
     backend_print "$AIS_SESSION_DIR"
-    printf '\n'
+    printf '# environment\n'
     ais_hook env_print
     printf 'cwd: %s\n' "$AIS_CWD"
     printf 'command:'

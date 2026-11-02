@@ -1,0 +1,16 @@
+# AppArmor profile for ai-sandbox (spec §7, setup step 4).
+# Ubuntu 24.04+ restricts unprivileged user namespaces; this profile lets /usr/bin/bwrap
+# (and nothing else) create them. Everything bwrap starts inside the sandbox is still
+# confined by bwrap's --disable-userns, so nested user namespaces stay refused (I8).
+# Install: sudo install -m 0644 bwrap-ai-sandbox /etc/apparmor.d/ &&
+#          sudo apparmor_parser -r /etc/apparmor.d/bwrap-ai-sandbox
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile bwrap-ai-sandbox /usr/bin/bwrap flags=(unconfined) {
+  userns,
+
+  include if exists <local/bwrap-ai-sandbox>
+}

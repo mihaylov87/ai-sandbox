@@ -49,4 +49,6 @@ esac
 
 [ "$#" -gt 0 ] || die 127 "no command given"
 command -v "$1" >/dev/null 2>&1 || die 127 "command not found inside the sandbox: $1"
+# This shell exports PWD on its own; the harness gets only the launcher's set (E1).
+unset PWD OLDPWD
 exec "$@"
