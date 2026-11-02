@@ -246,6 +246,22 @@ matrix_rows() {
   row E1 both - allowed "environment contains only the allowed set" --raw -- \
     python3 -I -c 'import os,sys; sys.exit(0 if " ".join(sorted(os.environ)) == sys.argv[1] else 1)' "$(_chk_expected_env)"
 
+  # I9: TIOCSTI pushes one space into the controlling terminal's input; allowed = injected.
+  # Needs a controlling terminal on the host (run --check from a terminal).
+  if (: </dev/tty) 2>/dev/null; then
+    row I9 both "$([ "$AIS_PLATFORM" = macos ] && echo G2 || echo -)" denied "TIOCSTI injection into the controlling terminal" --raw -- python3 -I -c '
+import fcntl, os, sys, termios
+req = getattr(termios, "TIOCSTI", 0x5412 if sys.platform.startswith("linux") else 0x80017472)
+try:
+    fd = os.open("/dev/tty", os.O_RDWR)
+    fcntl.ioctl(fd, req, b" ")
+except OSError:
+    sys.exit(1)
+sys.exit(0)'
+  else
+    row I9 both G2 skip:"no controlling terminal; run --check from a terminal" "TIOCSTI injection" -- true
+  fi
+
   _chk_net_rows
 }
 
