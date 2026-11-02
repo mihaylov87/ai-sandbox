@@ -1,0 +1,800 @@
+#!/usr/bin/env python3
+"""ai-sandbox-net: egress proxy, bridge, watchdog and pty relay (spec §9). Python 3.9+, stdlib only.
+
+  ai-sandbox-net proxy    --listen unix:PATH | tcp:127.0.0.1:0
+                          --allow-file FILE --host-ports "P1 P2"
+                          [--upstream URL] --log FILE --watch-pid PID --kill-pgid PGID
+  ai-sandbox-net bridge   [--listen 127.0.0.1:3128] --upstream unix:PATH [--forward PORT]...
+  ai-sandbox-net watchdog --watch-pid PID --kill-pgid PGID
+  ai-sandbox-net pty      -- COMMAND [ARGS]...
+
+proxy, bridge and watchdog print exactly one line "READY <address>" on stdout once ready and
+nothing else there afterwards (pty relays the terminal, so it prints no READY line). Errors go
+to stderr with exit status 1.
+"""
+
+import argparse
+import ipaddress
+import json
+import os
+import re
+import select
+import signal
+import socket
+import sys
+import threading
+import time
+import urllib.parse
+
+CONNECT_TIMEOUT = 10
+IDLE_TIMEOUT = 600
+MAX_TUNNELS = 256
+HEADER_LIMIT = 65536
+WATCH_INTERVAL = 1.0
+KILL_GRACE = 5.0
+
+_LABEL = re.compile(r"^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$")
+
+
+def die(msg):
+    sys.stderr.write("ai-sandbox-net: %s\n" % msg)
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Hosts, allowlist, private ranges
+
+def _ip_literal(host):
+    """Return the canonical string of an IP literal, or None."""
+    h = host.split("%", 1)[0]
+    try:
+        return str(ipaddress.ip_address(h))
+    except ValueError:
+        return None
+
+
+def normalise_host(host):
+    """Lower-case, strip one trailing dot, IDNA-encode; IP literals in canonical form."""
+    h = host.strip()
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1]
+        ip = _ip_literal(h)
+        if ip is None or ":" not in ip:
+            raise ValueError("invalid bracketed IPv6 literal: %r" % host)
+        return ip
+    ip = _ip_literal(h)
+    if ip is not None:
+        return ip
+    h = h.lower()
+    if h.endswith("."):
+        h = h[:-1]
+    if not h:
+        raise ValueError("empty host")
+    try:
+        h = h.encode("idna").decode("ascii")
+    except UnicodeError:
+        raise ValueError("invalid host name: %r" % host)
+    for label in h.split("."):
+        if not _LABEL.match(label):
+            raise ValueError("invalid host name: %r" % host)
+    return h
+
+
+def _parse_port(text, what):
+    if not text.isdigit():
+        raise ValueError("invalid port in %r" % what)
+    port = int(text)
+    if not 1 <= port <= 65535:
+        raise ValueError("port out of range in %r" % what)
+    return port
+
+
+def split_host_port(text, default_port=None):
+    """'host', 'host:port', '[v6]', '[v6]:port', bare IPv6 -> (host, port or default)."""
+    t = text.strip()
+    if t.startswith("["):
+        end = t.find("]")
+        if end < 0:
+            raise ValueError("unbalanced bracket in %r" % text)
+        host, rest = t[:end + 1], t[end + 1:]
+        if rest == "":
+            return host, default_port
+        if not rest.startswith(":"):
+            raise ValueError("invalid %r" % text)
+        return host, _parse_port(rest[1:], text)
+    if t.count(":") > 1:
+        if _ip_literal(t) is None:
+            raise ValueError("invalid %r (bracket IPv6 literals)" % text)
+        return t, default_port
+    if ":" in t:
+        host, port = t.rsplit(":", 1)
+        return host, _parse_port(port, text)
+    return t, default_port
+
+
+class Entry(object):
+    __slots__ = ("host", "port", "wildcard", "is_ip")
+
+    def __init__(self, host, port, wildcard, is_ip):
+        self.host, self.port, self.wildcard, self.is_ip = host, port, wildcard, is_ip
+
+    def key(self):
+        return (self.host, self.port, self.wildcard)
+
+
+def parse_entry(text):
+    t = text.strip()
+    wildcard = False
+    if "*" in t:
+        if not t.startswith("*.") or "*" in t[2:]:
+            raise ValueError("wildcards must have the form *.domain[:port]: %r" % text)
+        wildcard = True
+        t = t[2:]
+    host, port = split_host_port(t)
+    if not host:
+        raise ValueError("empty host in %r" % text)
+    norm = normalise_host(host)
+    is_ip = _ip_literal(norm) is not None
+    if wildcard and is_ip:
+        raise ValueError("wildcard on an IP literal: %r" % text)
+    return Entry(norm, port, wildcard, is_ip)
+
+
+class AllowList(object):
+    def __init__(self, entries):
+        self.entries = entries
+
+    @classmethod
+    def parse(cls, text):
+        entries, seen = [], set()
+        for n, line in enumerate(text.splitlines(), 1):
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            try:
+                e = parse_entry(line)
+            except ValueError as ex:
+                raise ValueError("allow file line %d: %s" % (n, ex))
+            if e.key() not in seen:
+                seen.add(e.key())
+                entries.append(e)
+        return cls(entries)
+
+    def matches(self, host, port, connect):
+        """host must already be normalised."""
+        is_ip = _ip_literal(host) is not None
+        default = 443 if connect else 80
+        for e in self.entries:
+            if e.wildcard:
+                ok = not is_ip and host.endswith("." + e.host)
+            else:
+                ok = e.is_ip == is_ip and e.host == host
+            if ok and port == (default if e.port is None else e.port):
+                return True
+        return False
+
+
+_PRIVATE_NETS = [ipaddress.ip_network(n) for n in (
+    "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
+    "192.168.0.0/16", "224.0.0.0/4", "255.255.255.255/32",
+    "::/128", "::1/128", "fe80::/10", "fc00::/7", "ff00::/8")]
+
+
+def is_private(ip_text):
+    """Loopback, link-local (incl. 169.254.169.254), RFC 1918, CGNAT, ULA, unspecified, multicast."""
+    ip = ipaddress.ip_address(ip_text.split("%", 1)[0])
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip.version == n.version and ip in n for n in _PRIVATE_NETS)
+
+
+# ---------------------------------------------------------------------------
+# Sockets
+
+def listen_on(spec):
+    """unix:PATH or tcp:HOST:PORT (loopback only) -> (socket, address text)."""
+    if spec.startswith("unix:"):
+        path = spec[5:]
+        if os.path.exists(path):
+            os.unlink(path)
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        old = os.umask(0o177)
+        try:
+            s.bind(path)
+        finally:
+            os.umask(old)
+        s.listen(128)
+        return s, "unix:" + path
+    if spec.startswith("tcp:"):
+        spec = spec[4:]
+    host, port = spec.rsplit(":", 1)
+    if host not in ("127.0.0.1", "localhost"):
+        die("refusing to listen on non-loopback address %s" % host)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", int(port)))
+    s.listen(128)
+    return s, "tcp:127.0.0.1:%d" % s.getsockname()[1]
+
+
+def connect_to(spec, timeout=CONNECT_TIMEOUT):
+    if spec.startswith("unix:"):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect(spec[5:])
+    else:
+        host, port = spec.rsplit(":", 1)
+        s = socket.create_connection((host, int(port)), timeout=timeout)
+    s.settimeout(None)
+    return s
+
+
+def announce(address):
+    """Print the READY line, then detach stdout so nothing else is ever written there."""
+    sys.stdout.write("READY %s\n" % address)
+    sys.stdout.flush()
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 1)
+    os.close(devnull)
+
+
+def read_head(sock):
+    """Read up to the end of an HTTP header block. Returns (head bytes, leftover bytes)."""
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        if len(buf) > HEADER_LIMIT:
+            raise ValueError("header too large")
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise ValueError("connection closed before the end of the request header")
+        buf += chunk
+    end = buf.index(b"\r\n\r\n") + 4
+    return buf[:end], buf[end:]
+
+
+def relay(a, b, first_to_b=b"", idle=IDLE_TIMEOUT):
+    """Copy bytes both ways until both sides are done or idle. Returns (a->b, b->a) counts."""
+    up = down = 0
+    if first_to_b:
+        b.sendall(first_to_b)
+        up += len(first_to_b)
+    open_r = {a: b, b: a}
+    while open_r:
+        ready, _, _ = select.select(list(open_r), [], [], idle)
+        if not ready:
+            break
+        for s in ready:
+            try:
+                data = s.recv(65536)
+            except OSError:
+                data = b""
+            other = open_r.get(s)
+            if other is None:
+                continue
+            if not data:
+                del open_r[s]
+                try:
+                    other.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+                continue
+            try:
+                other.sendall(data)
+            except OSError:
+                open_r.clear()
+                break
+            if s is a:
+                up += len(data)
+            else:
+                down += len(data)
+    return up, down
+
+
+# ---------------------------------------------------------------------------
+# Process supervision
+
+def _group_alive(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def terminate_group(pgid, grace=KILL_GRACE):
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    deadline = time.time() + grace
+    while time.time() < deadline:
+        if not _group_alive(pgid):
+            return
+        time.sleep(0.1)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def watch(pid, pgid, grace=KILL_GRACE):
+    """Block until pid is gone, then end the process group and this process."""
+    while _pid_alive(pid):
+        time.sleep(WATCH_INTERVAL)
+    if pgid:
+        terminate_group(pgid, grace)
+    os._exit(0)
+
+
+def start_watch_thread(pid, pgid, grace=KILL_GRACE):
+    if pid:
+        t = threading.Thread(target=watch, args=(pid, pgid, grace), daemon=True)
+        t.start()
+
+
+# ---------------------------------------------------------------------------
+# Proxy
+
+_REASONS = {200: "Connection Established", 400: "Bad Request", 403: "Forbidden",
+            502: "Bad Gateway", 503: "Service Unavailable"}
+
+
+def send_status(sock, code, message=""):
+    body = ("ai-sandbox proxy: %s\n" % message).encode() if message else b""
+    head = "HTTP/1.1 %d %s\r\n" % (code, _REASONS.get(code, ""))
+    if code != 200:
+        head += "Content-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n" % len(body)
+    try:
+        sock.sendall(head.encode() + b"\r\n" + body)
+    except OSError:
+        pass
+
+
+class Proxy(object):
+    def __init__(self, allow, host_ports, upstream, log_path, max_tunnels=MAX_TUNNELS):
+        self.allow = allow
+        self.host_ports = host_ports
+        self.upstream = upstream  # (host, port) or None
+        self.log_path = log_path
+        self.max_tunnels = max_tunnels
+        self.active = 0
+        self.lock = threading.Lock()
+        self.log_lock = threading.Lock()
+
+    def log(self, rec):
+        rec["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        line = json.dumps(rec, sort_keys=True) + "\n"
+        with self.log_lock:
+            with open(self.log_path, "a") as f:
+                f.write(line)
+
+    def serve(self, listener):
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                continue
+            threading.Thread(target=self.handle, args=(conn,), daemon=True).start()
+
+    # -- request parsing
+
+    @staticmethod
+    def parse_request(head):
+        lines = head.decode("latin-1").split("\r\n")
+        parts = lines[0].split(" ")
+        if len(parts) != 3 or not parts[2].startswith("HTTP/"):
+            raise ValueError("malformed request line")
+        method, target, _ = parts
+        headers = []
+        for line in lines[1:]:
+            if not line:
+                continue
+            if ":" not in line:
+                raise ValueError("malformed header")
+            k, v = line.split(":", 1)
+            headers.append((k.strip(), v.strip()))
+        return method.upper(), target, headers
+
+    @staticmethod
+    def http_target(target, headers):
+        """Plain HTTP: absolute-form URI or Host header. Returns (host, port, origin path)."""
+        if target.lower().startswith("http://"):
+            u = urllib.parse.urlsplit(target)
+            hostport = u.netloc.rsplit("@", 1)[-1]
+            path = u.path or "/"
+            if u.query:
+                path += "?" + u.query
+        elif target.startswith("/"):
+            hostport = next((v for k, v in headers if k.lower() == "host"), "")
+            path = target
+        else:
+            raise ValueError("unsupported request target")
+        host, port = split_host_port(hostport, 80)
+        if not host:
+            raise ValueError("no host")
+        return host, port, path
+
+    # -- decisions
+
+    def decide(self, host, port, connect):
+        """Returns (verdict, addresses, message). addresses: list of (family, sockaddr) or None."""
+        if host == "127.0.0.1" and port in self.host_ports:
+            return "allow", [(socket.AF_INET, ("127.0.0.1", port))], ""
+        if not self.allow.matches(host, port, connect):
+            return "deny:host", None, "%s:%d is not in the allowlist" % (host, port)
+        literal = _ip_literal(host)
+        if literal is not None:
+            if is_private(literal):
+                return "deny:private", None, "%s is a private address" % literal
+            fam = socket.AF_INET6 if ":" in literal else socket.AF_INET
+            return "allow", [(fam, (literal, port))], ""
+        if self.upstream is not None:
+            return "allow", None, ""  # the upstream proxy resolves the name
+        try:
+            infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+        except socket.gaierror:
+            return "error", None, "cannot resolve %s" % host
+        addrs = [(fam, sa) for fam, _, _, _, sa in infos]
+        for _, sa in addrs:
+            if is_private(sa[0]):
+                return "deny:private", None, "%s resolves to the private address %s" % (host, sa[0])
+        return "allow", addrs, ""
+
+    def open_direct(self, addrs):
+        last = None
+        for fam, sa in addrs:
+            s = socket.socket(fam, socket.SOCK_STREAM)
+            s.settimeout(CONNECT_TIMEOUT)
+            try:
+                s.connect(sa)
+                s.settimeout(None)
+                return s, sa[0]
+            except OSError as ex:
+                last = ex
+                s.close()
+        raise OSError("connect failed: %s" % last)
+
+    def open_upstream_tunnel(self, host, port):
+        s = socket.create_connection(self.upstream, timeout=CONNECT_TIMEOUT)
+        hp = "[%s]:%d" % (host, port) if ":" in host else "%s:%d" % (host, port)
+        s.sendall(("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n" % (hp, hp)).encode())
+        head, rest = read_head(s)
+        if not head.split(b" ", 2)[1:2] == [b"200"]:
+            s.close()
+            raise OSError("upstream proxy refused CONNECT %s" % hp)
+        s.settimeout(None)
+        return s, rest
+
+    # -- handler
+
+    def handle(self, conn):
+        t0 = time.time()
+        rec = {"verdict": "error", "method": "", "host": "", "port": 0, "ip": "", "up": 0, "down": 0}
+        counted = False
+        up_sock = None
+        try:
+            conn.settimeout(30)
+            try:
+                head, leftover = read_head(conn)
+                method, target, headers = self.parse_request(head)
+                rec["method"] = method
+                if method == "CONNECT":
+                    host, port = split_host_port(target)
+                    if port is None:
+                        raise ValueError("CONNECT needs host:port")
+                    path = None
+                else:
+                    host, port, path = self.http_target(target, headers)
+                host = normalise_host(host)
+            except ValueError as ex:
+                send_status(conn, 400, str(ex))
+                return
+            rec["host"], rec["port"] = host, port
+
+            verdict, addrs, msg = self.decide(host, port, method == "CONNECT")
+            rec["verdict"] = verdict
+            if verdict.startswith("deny"):
+                send_status(conn, 403, msg)
+                return
+            if verdict == "error":
+                send_status(conn, 502, msg)
+                return
+
+            with self.lock:
+                if self.active >= self.max_tunnels:
+                    rec["verdict"] = "error"
+                    send_status(conn, 503, "too many concurrent connections")
+                    return
+                self.active += 1
+                counted = True
+
+            first = b""
+            try:
+                if self.upstream is not None and method == "CONNECT":
+                    up_sock, first_down = self.open_upstream_tunnel(host, port)
+                    rec["ip"] = "upstream"
+                elif self.upstream is not None:
+                    up_sock = socket.create_connection(self.upstream, timeout=CONNECT_TIMEOUT)
+                    up_sock.settimeout(None)
+                    rec["ip"] = "upstream"
+                    first_down = b""
+                else:
+                    up_sock, rec["ip"] = self.open_direct(addrs)
+                    first_down = b""
+            except OSError as ex:
+                rec["verdict"] = "error"
+                send_status(conn, 502, str(ex))
+                return
+
+            conn.settimeout(None)
+            if method == "CONNECT":
+                send_status(conn, 200)
+                if first_down:
+                    conn.sendall(first_down)
+                first = leftover
+            else:
+                kept = [(k, v) for k, v in headers
+                        if k.lower() not in ("proxy-connection", "proxy-authorization", "connection", "keep-alive")]
+                if self.upstream is not None:
+                    hp = "[%s]:%d" % (host, port) if ":" in host else "%s:%d" % (host, port)
+                    line = "%s http://%s%s HTTP/1.1" % (method, hp, path)
+                else:
+                    line = "%s %s HTTP/1.1" % (method, path)
+                lines = [line] + ["%s: %s" % kv for kv in kept] + ["Connection: close", "", ""]
+                first = "\r\n".join(lines).encode("latin-1") + leftover
+            up, down = relay(conn, up_sock, first)
+            rec["up"], rec["down"] = up, down + len(first_down)
+        except OSError:
+            rec["verdict"] = "error" if rec["verdict"] == "allow" and rec["down"] == 0 else rec["verdict"]
+        finally:
+            if counted:
+                with self.lock:
+                    self.active -= 1
+            for s in (conn, up_sock):
+                if s is not None:
+                    try:
+                        s.close()
+                    except OSError:
+                        pass
+            rec["ms"] = int((time.time() - t0) * 1000)
+            try:
+                self.log(rec)
+            except OSError:
+                pass
+
+
+def cmd_proxy(args):
+    try:
+        with open(args.allow_file) as f:
+            allow = AllowList.parse(f.read())
+    except (OSError, ValueError) as ex:
+        die(str(ex))
+    try:
+        host_ports = set(_parse_port(p, "--host-ports") for p in args.host_ports.split())
+    except ValueError as ex:
+        die(str(ex))
+    upstream = None
+    if args.upstream:
+        u = urllib.parse.urlsplit(args.upstream)
+        if u.scheme != "http" or not u.hostname:
+            die("--upstream must be an http://host[:port] URL")
+        upstream = (u.hostname, u.port or 80)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    listener, address = listen_on(args.listen)
+    proxy = Proxy(allow, host_ports, upstream, args.log, args.max_tunnels)
+    start_watch_thread(args.watch_pid, args.kill_pgid)
+    announce(address)
+    proxy.serve(listener)
+
+
+# ---------------------------------------------------------------------------
+# Bridge (inside the Linux network namespace)
+
+def _bridge_plain(conn, upstream):
+    try:
+        up = connect_to(upstream)
+    except OSError:
+        conn.close()
+        return
+    try:
+        relay(conn, up)
+    finally:
+        conn.close()
+        up.close()
+
+
+def _bridge_forward(conn, upstream, port):
+    up = None
+    try:
+        up = connect_to(upstream)
+        target = "127.0.0.1:%d" % port
+        up.sendall(("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n" % (target, target)).encode())
+        head, rest = read_head(up)
+        if head.split(b" ", 2)[1:2] != [b"200"]:
+            return
+        if rest:
+            conn.sendall(rest)
+        relay(conn, up)
+    except (OSError, ValueError):
+        pass
+    finally:
+        conn.close()
+        if up is not None:
+            up.close()
+
+
+def _accept_loop(listener, target, *extra):
+    while True:
+        try:
+            conn, _ = listener.accept()
+        except OSError:
+            continue
+        threading.Thread(target=target, args=(conn,) + extra, daemon=True).start()
+
+
+def cmd_bridge(args):
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    threads, address = [], None
+    if args.listen:
+        listener, address = listen_on(args.listen)
+        threads.append(threading.Thread(target=_accept_loop, args=(listener, _bridge_plain, args.upstream),
+                                        daemon=True))
+    for p in args.forward:
+        try:
+            port = _parse_port(str(p), "--forward")
+        except ValueError as ex:
+            die(str(ex))
+        listener, _ = listen_on("tcp:127.0.0.1:%d" % port)
+        threads.append(threading.Thread(target=_accept_loop,
+                                        args=(listener, _bridge_forward, args.upstream, port), daemon=True))
+    if not threads:
+        die("bridge needs --listen or --forward")
+    for t in threads:
+        t.start()
+    announce(address or "forward:" + ",".join(str(p) for p in args.forward))
+    while True:
+        time.sleep(3600)
+
+
+# ---------------------------------------------------------------------------
+# Watchdog
+
+def cmd_watchdog(args):
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    announce("watchdog:%d" % args.watch_pid)
+    watch(args.watch_pid, args.kill_pgid, args.grace)
+
+
+# ---------------------------------------------------------------------------
+# pty relay (gate G2 fallback)
+
+def cmd_pty(args):
+    import fcntl
+    import pty
+    import termios
+    import tty
+
+    argv = args.command
+    if argv and argv[0] == "--":
+        argv = argv[1:]
+    if not argv:
+        die("pty needs a command")
+    pid, fd = pty.fork()
+    if pid == 0:
+        try:
+            os.execvp(argv[0], argv)
+        except OSError as ex:
+            sys.stderr.write("ai-sandbox-net: %s: %s\n" % (argv[0], ex))
+        os._exit(127)
+
+    def copy_winsize(*_):
+        try:
+            ws = fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8)
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, ws)
+        except OSError:
+            pass
+
+    def forward(signum, _frame):
+        try:
+            os.kill(pid, signum)
+        except ProcessLookupError:
+            pass
+
+    copy_winsize()
+    signal.signal(signal.SIGWINCH, copy_winsize)
+    for s in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(s, forward)
+    old = None
+    if os.isatty(0):
+        old = termios.tcgetattr(0)
+        tty.setraw(0)
+    try:
+        fds = [0, fd]
+        while True:
+            try:
+                ready, _, _ = select.select(fds, [], [])
+            except InterruptedError:
+                continue
+            if fd in ready:
+                try:
+                    data = os.read(fd, 65536)
+                except OSError:
+                    data = b""
+                if not data:
+                    break
+                os.write(1, data)
+            if 0 in ready:
+                data = os.read(0, 65536)
+                if data:
+                    os.write(fd, data)
+                else:
+                    fds = [fd]
+    finally:
+        if old is not None:
+            termios.tcsetattr(0, termios.TCSADRAIN, old)
+    _, status = os.waitpid(pid, 0)
+    if os.WIFSIGNALED(status):
+        sys.exit(128 + os.WTERMSIG(status))
+    sys.exit(os.WEXITSTATUS(status))
+
+
+# ---------------------------------------------------------------------------
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="ai-sandbox-net")
+    sub = p.add_subparsers(dest="cmd")
+
+    pp = sub.add_parser("proxy")
+    pp.add_argument("--listen", required=True)
+    pp.add_argument("--allow-file", required=True)
+    pp.add_argument("--host-ports", default="")
+    pp.add_argument("--upstream", default="")
+    pp.add_argument("--log", required=True)
+    pp.add_argument("--watch-pid", type=int, default=0)
+    pp.add_argument("--kill-pgid", type=int, default=0)
+    pp.add_argument("--max-tunnels", type=int, default=MAX_TUNNELS, help=argparse.SUPPRESS)
+
+    pb = sub.add_parser("bridge")
+    pb.add_argument("--listen", default="")
+    pb.add_argument("--upstream", required=True)
+    pb.add_argument("--forward", action="append", default=[])
+
+    pw = sub.add_parser("watchdog")
+    pw.add_argument("--watch-pid", type=int, required=True)
+    pw.add_argument("--kill-pgid", type=int, required=True)
+    pw.add_argument("--grace", type=float, default=KILL_GRACE, help=argparse.SUPPRESS)
+
+    pt = sub.add_parser("pty")
+    pt.add_argument("command", nargs=argparse.REMAINDER)
+
+    args = p.parse_args(argv)
+    if args.cmd == "proxy":
+        cmd_proxy(args)
+    elif args.cmd == "bridge":
+        cmd_bridge(args)
+    elif args.cmd == "watchdog":
+        cmd_watchdog(args)
+    elif args.cmd == "pty":
+        cmd_pty(args)
+    else:
+        p.print_usage(sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
