@@ -1,0 +1,14 @@
+# ai-sandbox-ir 1
+# platform=linux harness=copilot work=@ROOT@/sys/home/jordan/src/app
+hidden	dir	@ROOT@/sys/home
+hidden	dir	@ROOT@/sys/media
+hidden	dir	@ROOT@/sys/mnt
+hidden	dir	@ROOT@/sys/home/jordan
+hidden	dir	@ROOT@/sys/run/user/@UID@
+rw	dir	@ROOT@/sys/home/jordan/.cache/ai-sandbox
+rw	dir	@ROOT@/sys/home/jordan/src/app
+locked	file	@ROOT@/sys/home/jordan/.config/ai-sandbox/config
+locked	dir	@ROOT@/sys/home/jordan/.config/ai-sandbox/projects
+locked	dir	@ROOT@/sys/home/jordan/.local/share/ai-sandbox
+locked	dir	@ROOT@/sys/home/jordan/src/app/.git/hooks
+locked	dir	@ROOT@/sys/home/jordan/src/app/.git/info

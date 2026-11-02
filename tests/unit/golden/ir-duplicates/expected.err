@@ -1,0 +1,3 @@
+ai-sandbox: warning: @ROOT@/sys/home/jordan from AI_SANDBOX_RO_PATHS (ro) is overridden by hidden from default
+ai-sandbox: warning: @ROOT@/sys/home/jordan/src/app from AI_SANDBOX_RO_PATHS (ro) is overridden by rw from AI_SANDBOX_WORK_DIR
+ai-sandbox: warning: @ROOT@/sys/home/jordan/src/app/docs from --rw (rw) is overridden by locked from AI_SANDBOX_LOCKED_PATHS

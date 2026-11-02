@@ -387,3 +387,21 @@ cfg_load() {
   cfg_apply_cli
   cfg_validate
 }
+
+# ---------------------------------------------------------------------------
+# Harness profile (spec §11): one Bash file in $AIS_INSTALL_DIR/profiles/.
+# Sets the PROFILE_* variables and AIS_STATE_DIR (effective state dir).
+
+cfg_load_profile() {
+  local f="${AIS_INSTALL_DIR:?AIS_INSTALL_DIR not set}/profiles/$AI_SANDBOX_HARNESS.sh"
+  [ -f "$f" ] || ais_die 125 "harness profile '$AI_SANDBOX_HARNESS' not found: $f"
+  PROFILE_COMMAND=() PROFILE_STATE_ENV= PROFILE_STATE_DIR= PROFILE_RW=() PROFILE_RO=()
+  PROFILE_LOCKED=() PROFILE_SECRETS=() PROFILE_ENV=() PROFILE_PASS_ENV=() PROFILE_NET_ALLOW=()
+  PROFILE_PATH_ADD=() PROFILE_ALLOW_USERNS=0
+  . "$f" || ais_die 125 "error while loading harness profile $f"
+  if [ "$AI_SANDBOX_STATE" = shared ]; then
+    AIS_STATE_DIR=$PROFILE_STATE_DIR
+  else
+    AIS_STATE_DIR="$HOME/.local/state/ai-sandbox/$AI_SANDBOX_HARNESS"
+  fi
+}
