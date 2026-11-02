@@ -212,3 +212,16 @@ test_shell_mode_runs_bash_with_args() {
   assert_eq 0 "$RC" "$ERR" || return 1
   assert_eq "in bash" "$OUT"
 }
+
+test_own_process_group_child_is_supervised_and_forwarded() {
+  launcher_fixture
+  # AIS_RUN_PGRP=1 (macOS): the child leads its own group; exit codes and SIGTERM still work.
+  capture env _AIS_STUB_PGRP=1 "$LAUNCHER" -- python3 -I -c 'import os; print(os.getpgrp() == os.getpid())'
+  assert_eq 0 "$RC" "$ERR" || return 1
+  assert_eq True "$OUT" || return 1
+  capture env _AIS_STUB_PGRP=1 "$LAUNCHER" -- sh -c 'exit 7'
+  assert_eq 7 "$RC" "$ERR" || return 1
+  capture bash -c '_AIS_STUB_PGRP=1 "$1" -- sleep 5 & p=$!; sleep 0.7; kill -TERM $p; wait $p' _ "$LAUNCHER"
+  assert_eq 143 "$RC" "$ERR" || return 1
+  assert_not_contains "$ERR" "Terminated" "no job notice"
+}

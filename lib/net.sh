@@ -100,7 +100,8 @@ net_launch() {
     exec 4<"$fifo"
     AIS_NET_FIFO_FD=4
     rm -f "$fifo"
-  else
+  elif [ "$AIS_PLATFORM" != macos ]; then
+    # macOS: the backend starts the watchdog once the child's process group exists.
     "$AIS_PYTHON" -I -S "$AIS_INSTALL_DIR/ai-sandbox-net" watchdog --watch-pid "$$" --kill-pgid "$kill_pgid" \
       </dev/null >/dev/null 2>"$errf" &
     AIS_NET_PID=$!

@@ -1,0 +1,16 @@
+# ai-sandbox-ir 1
+# platform=macos harness=claude work=/Users/jordan/src/app
+hidden	dir	/Users
+hidden	dir	/Volumes
+hidden	dir	/Users/jordan
+hidden	dir	/private/tmp/tmux-501
+ro	file	/Users/jordan/.gitconfig
+rw	dir	/Users/jordan/.cache/ai-sandbox
+rw	dir	/Users/jordan/src/app
+rw	dir	/Users/jordan/src/we\ird
+rw	dir	/Users/jordan/.local/state/ai-sandbox/sessions/s1/tmp
+locked	dir	/opt/ai-sandbox
+locked	file	/Users/jordan/.config/ai-sandbox/config
+locked	dir	/Users/jordan/src/app/.git/hooks
+locked	file	/Users/jordan/src/app/.git/config
+hidden	dir	/Users/jordan/src/app/.git/hooks/secret

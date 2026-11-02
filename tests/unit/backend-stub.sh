@@ -16,4 +16,7 @@ backend_command() { # session-dir cwd -- command...
   AIS_RUN_CWD=$2
   shift 3
   AIS_RUN_ARGV=("$@")
+  # _AIS_STUB_PGRP=1: run the child in its own process group, as the macOS backend does.
+  [ "${_AIS_STUB_PGRP-}" = 1 ] && AIS_RUN_PGRP=1
+  return 0
 }
