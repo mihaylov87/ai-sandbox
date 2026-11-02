@@ -274,3 +274,27 @@ policy_class_of() { # resolved-path
   else echo "${best:-ro}"
   fi
 }
+
+# --print-policy --ir PATH...: which entry decides a path's class (spec §14).
+policy_explain() { # path
+  local p=$1 i k best=-1 bestlen=-1 lock=-1 locklen=-1 d
+  if [ -e "$p" ]; then p=$(realpath "$p"); fi
+  i=0
+  while [ "$i" -lt "${#K_PATH[@]}" ]; do
+    k=${K_PATH[$i]}
+    case "$p" in
+      "$k" | "$k"/*)
+        if [ "${K_CLASS[$i]}" = locked ] && [ "${#k}" -gt "$locklen" ]; then lock=$i locklen=${#k}; fi
+        if [ "${#k}" -gt "$bestlen" ]; then best=$i bestlen=${#k}; fi
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  if [ "$best" -ge 0 ] && [ "${K_CLASS[$best]}" != hidden ] && [ "$lock" -ge 0 ]; then best=$lock; fi
+  if [ "$best" -lt 0 ]; then
+    printf '%s: ro (base)\n' "$1"
+  else
+    d=${K_CLASS[$best]}
+    printf '%s: %s (%s %s, from %s)\n' "$1" "$d" "$d" "${K_PATH[$best]}" "${K_SRC[$best]}"
+  fi
+}

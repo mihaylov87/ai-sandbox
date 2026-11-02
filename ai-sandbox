@@ -91,6 +91,7 @@ fi
 # ---------------------------------------------------------------------------
 # Step 6 (before the IR, because the IR names the session tmp dir): session dir.
 
+AIS_START_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 AIS_SESSION_ID="$(date +%Y%m%d-%H%M%S)-$$"
 _ais_sessions="$HOME/.local/state/ai-sandbox/sessions"
 mkdir -p "$_ais_sessions"
@@ -151,7 +152,13 @@ case "$CLI_MODE" in
     ais_hook net_prepare
     backend_compile "$AIS_SESSION_DIR/policy.ir" "$AIS_SESSION_DIR"
     if [ "$CLI_MODE" = print-policy ]; then
-      if [ "$CLI_IR" = 1 ]; then cat "$AIS_SESSION_DIR/policy.ir"; else backend_print "$AIS_SESSION_DIR"; fi
+      if [ "$CLI_IR" = 1 ] && [ "$CLI_CMD_SET" = 1 ]; then
+        for _ais_w in "${CLI_CMD[@]}"; do policy_explain "$_ais_w"; done
+      elif [ "$CLI_IR" = 1 ]; then
+        cat "$AIS_SESSION_DIR/policy.ir"
+      else
+        backend_print "$AIS_SESSION_DIR"
+      fi
       exit 0
     fi
     printf '# policy\n'
