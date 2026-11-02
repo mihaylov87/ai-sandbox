@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# ai-sandbox v2 launcher (spec §4). Bash 3.2 compatible.
+# Runs a coding-agent harness inside a kernel-enforced sandbox and stays as its parent.
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Step 1: resolve the install dir through symlinks; refuse a writable install.
+
+_ais_self=$0
+while [ -L "$_ais_self" ]; do
+  _ais_link=$(readlink "$_ais_self")
+  case "$_ais_link" in
+    /*) _ais_self=$_ais_link ;;
+    *) _ais_self=$(dirname "$_ais_self")/$_ais_link ;;
+  esac
+done
+AIS_INSTALL_DIR=$(cd "$(dirname "$_ais_self")" && pwd -P)
+unset _ais_self _ais_link
+
+. "$AIS_INSTALL_DIR/lib/config.sh"
+. "$AIS_INSTALL_DIR/lib/policy.sh"
+for _ais_lib in env exitreport net gates; do
+  [ -f "$AIS_INSTALL_DIR/lib/$_ais_lib.sh" ] && . "$AIS_INSTALL_DIR/lib/$_ais_lib.sh"
+done
+unset _ais_lib
+
+_ais_writable=$(find "$AIS_INSTALL_DIR" ! -type l \( -perm -020 -o -perm -002 \) -print 2>/dev/null | head -n 1)
+[ -z "$_ais_writable" ] ||
+  ais_die 126 "install dir is group- or world-writable: $_ais_writable (run: chmod -R go-w $AIS_INSTALL_DIR)"
+unset _ais_writable
+
+# Call a hook if a later work package defined it.
+ais_hook() { # name args...
+  if declare -F "$1" >/dev/null; then "$@"; fi
+}
+
+# ---------------------------------------------------------------------------
+# Step 2: platform and backend.
+#
+# Backend interface (lib/backend-<name>.sh; tests/unit/backend-stub.sh for tests):
+#   backend_preflight                       dependencies, nesting checks; exit 126 on failure
+#   backend_compile IR SESSION              write the compiled policy into SESSION
+#   backend_print SESSION                   print the compiled policy (--print-policy)
+#   backend_command SESSION CWD -- CMD...   set AIS_RUN_ARGV (argv to exec on the host)
+#                                           and AIS_RUN_CWD (host cwd for it, may be empty)
+# Hooks other work packages may define (called only if defined): env_build, env_print,
+# env_apply (WP5); gates_check, check_run (WP10); exitreport_start, exitreport_finish,
+# sessionlog_append (WP7); net_start, net_stop (WP11); profile_preflight_check (WP6).
+
+[ "${AI_SANDBOX-}" != 1 ] || ais_die 126 "already inside an ai-sandbox session (AI_SANDBOX=1); nesting is refused"
+
+case "$(uname -s)" in
+  Linux) AIS_PLATFORM=linux _ais_backend=bwrap ;;
+  Darwin) AIS_PLATFORM=macos _ais_backend=seatbelt ;;
+  *) ais_die 126 "unsupported platform: $(uname -s)" ;;
+esac
+if [ -n "${_AIS_TEST_BACKEND-}" ]; then
+  _ais_backend_file="$AIS_INSTALL_DIR/tests/unit/backend-${_AIS_TEST_BACKEND}.sh"
+else
+  _ais_backend_file="$AIS_INSTALL_DIR/lib/backend-$_ais_backend.sh"
+fi
+[ -f "$_ais_backend_file" ] || ais_die 126 "backend not available: $_ais_backend_file"
+. "$_ais_backend_file"
+unset _ais_backend _ais_backend_file
+
+AIS_PYTHON=$(command -v python3 2>/dev/null) || ais_die 126 "python3 (3.9+) not found"
+
+# ---------------------------------------------------------------------------
+# Step 3: config, then profile.
+
+cfg_load "$@"
+cfg_load_profile
+ais_hook profile_preflight_check
+
+# The command to run: CLI > AI_SANDBOX_COMMAND > profile; --shell runs bash.
+AIS_CMD=()
+if [ "$CLI_MODE" = shell ]; then
+  AIS_CMD=(bash ${CLI_CMD[@]+"${CLI_CMD[@]}"})
+elif [ "$CLI_CMD_SET" = 1 ]; then
+  AIS_CMD=("${CLI_CMD[@]}")
+elif [ -n "$AI_SANDBOX_COMMAND" ]; then
+  set -f
+  eval "AIS_CMD=($AI_SANDBOX_COMMAND)" || ais_die 125 "AI_SANDBOX_COMMAND cannot be parsed: $AI_SANDBOX_COMMAND"
+  set +f
+elif [ "${#PROFILE_COMMAND[@]}" -gt 0 ]; then
+  AIS_CMD=("${PROFILE_COMMAND[@]}")
+fi
+[ "${#AIS_CMD[@]}" -gt 0 ] || [ "$CLI_MODE" = print-policy ] || [ "$CLI_MODE" = check ] ||
+  ais_die 125 "no command: profile '$AI_SANDBOX_HARNESS' has none; set AI_SANDBOX_COMMAND or pass one after --"
+
+# ---------------------------------------------------------------------------
+# Step 6 (before the IR, because the IR names the session tmp dir): session dir.
+
+AIS_SESSION_ID="$(date +%Y%m%d-%H%M%S)-$$"
+_ais_sessions="$HOME/.local/state/ai-sandbox/sessions"
+mkdir -p "$_ais_sessions"
+chmod 0700 "$HOME/.local/state/ai-sandbox" "$_ais_sessions"
+AIS_SESSION_DIR="$_ais_sessions/$AIS_SESSION_ID"
+mkdir -m 0700 "$AIS_SESSION_DIR"
+mkdir -m 0700 "$AIS_SESSION_DIR/tmp"
+unset _ais_sessions
+
+AIS_CHILD_PID=
+AIS_CHILD_RC=
+AIS_KEEP_SESSION=$CLI_KEEP_SESSION
+
+_ais_cleanup() {
+  local rc=$?
+  trap - EXIT INT QUIT TERM HUP
+  ais_hook net_stop || true
+  if [ -n "$AIS_CHILD_RC" ]; then
+    ais_hook exitreport_finish || true
+    ais_hook sessionlog_append "$AIS_CHILD_RC" || true
+    [ "$AIS_CHILD_RC" = 0 ] || AIS_KEEP_SESSION=1
+  fi
+  if [ "$AIS_KEEP_SESSION" = 1 ]; then
+    [ "$CLI_VERBOSE" = 1 ] && ais_warn "session kept: $AIS_SESSION_DIR"
+  else
+    rm -rf "$AIS_SESSION_DIR"
+  fi
+  exit "$rc"
+}
+trap _ais_cleanup EXIT
+
+# ---------------------------------------------------------------------------
+# Step 4: IR (and environment, WP5).
+
+policy_build "$AIS_SESSION_DIR/policy.ir"
+ais_hook env_build
+
+# Working directory inside: the caller's cwd if it is rw, ro or locked, else the work dir.
+AIS_CWD=$(pwd -P)
+case "$(policy_class_of "$AIS_CWD")" in
+  rw | ro | locked) ;;
+  *) AIS_CWD=$POLICY_WORK_DIR ;;
+esac
+
+# Step 5: verification gates (WP10).
+ais_hook gates_check
+
+# Step 6 (rest): exit-report manifest (WP7).
+ais_hook exitreport_start
+
+# ---------------------------------------------------------------------------
+# Step 8: compile the backend policy. Output-only modes stop here.
+
+backend_preflight
+backend_compile "$AIS_SESSION_DIR/policy.ir" "$AIS_SESSION_DIR"
+
+case "$CLI_MODE" in
+  print-policy)
+    if [ "$CLI_IR" = 1 ]; then cat "$AIS_SESSION_DIR/policy.ir"; else backend_print "$AIS_SESSION_DIR"; fi
+    exit 0
+    ;;
+  dry-run)
+    backend_print "$AIS_SESSION_DIR"
+    printf '\n'
+    ais_hook env_print
+    printf 'cwd: %s\n' "$AIS_CWD"
+    printf 'command:'
+    _ais_quoted=
+    for _ais_w in "${AIS_CMD[@]}"; do
+      case "$_ais_w" in
+        *[!A-Za-z0-9_./:=@%+,-]* | '') _ais_quoted="$_ais_quoted '$(printf '%s' "$_ais_w" | sed "s/'/'\\\\''/g")'" ;;
+        *) _ais_quoted="$_ais_quoted $_ais_w" ;;
+      esac
+    done
+    printf '%s\n' "$_ais_quoted"
+    exit 0
+    ;;
+  check)
+    declare -F check_run >/dev/null || ais_die 126 "--check is not available yet"
+    check_run
+    exit $?
+    ;;
+esac
+
+# Step 7: network helper (WP11).
+ais_hook net_start
+
+# ---------------------------------------------------------------------------
+# Step 9: run the child and supervise it.
+#
+# The child runs as an asynchronous job so that `wait` can be interrupted to forward
+# SIGTERM/SIGHUP. A non-interactive shell starts async jobs with SIGINT/SIGQUIT ignored
+# (and `trap -` cannot undo that), so the child is exec'd through a small Python step
+# that restores the default dispositions; Ctrl-C then reaches it. The launcher itself
+# survives SIGINT so that it can clean up.
+
+backend_command "$AIS_SESSION_DIR" "$AIS_CWD" -- "${AIS_CMD[@]}"
+
+_ais_forward() { # signal
+  [ -n "$AIS_CHILD_PID" ] && kill "-$1" "$AIS_CHILD_PID" 2>/dev/null
+  return 0
+}
+trap ':' INT QUIT
+trap '_ais_forward TERM' TERM
+trap '_ais_forward HUP' HUP
+
+AIS_EXEC_PY='import os,signal,sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+try:
+    os.execvp(sys.argv[1], sys.argv[1:])
+except FileNotFoundError:
+    sys.stderr.write("ai-sandbox: command not found: %s\n" % sys.argv[1]); sys.exit(127)
+except PermissionError:
+    sys.stderr.write("ai-sandbox: permission denied: %s\n" % sys.argv[1]); sys.exit(126)'
+
+(
+  [ -n "$AIS_RUN_CWD" ] && cd "$AIS_RUN_CWD"
+  ais_hook env_apply
+  exec "$AIS_PYTHON" -I -S -c "$AIS_EXEC_PY" "${AIS_RUN_ARGV[@]}"
+) <&0 &
+AIS_CHILD_PID=$!
+
+while :; do
+  set +e
+  wait "$AIS_CHILD_PID"
+  _ais_rc=$?
+  set -e
+  kill -0 "$AIS_CHILD_PID" 2>/dev/null || break
+done
+AIS_CHILD_RC=$_ais_rc
+
+# Step 10: cleanup runs from the EXIT trap.
+exit "$AIS_CHILD_RC"

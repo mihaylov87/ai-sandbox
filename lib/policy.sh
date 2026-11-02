@@ -251,3 +251,26 @@ policy_build() { # output-file
   _policy_validate
   _policy_emit "$1"
 }
+
+# Class of a path under the built policy (spec §5): the longest matching prefix decides,
+# except that a locked prefix wins over deeper ro/rw entries (phase B is mounted after
+# phase A), while hidden entries under a locked one stay hidden (phase C). Paths that
+# match nothing are under the read-only base.
+policy_class_of() { # resolved-path
+  local p=$1 i k best= bestlen=-1 locked=0
+  i=0
+  while [ "$i" -lt "${#K_PATH[@]}" ]; do
+    k=${K_PATH[$i]}
+    case "$p" in
+      "$k" | "$k"/*)
+        [ "${K_CLASS[$i]}" = locked ] && locked=1
+        if [ "${#k}" -gt "$bestlen" ]; then best=${K_CLASS[$i]} bestlen=${#k}; fi
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  if [ "$best" = hidden ]; then echo hidden
+  elif [ "$locked" = 1 ]; then echo locked
+  else echo "${best:-ro}"
+  fi
+}

@@ -105,3 +105,27 @@ test_cache_and_isolated_state_dirs_are_created_0700() {
     [ -n "$(find "$d" -prune -perm 700)" ] || fail "$d is not mode 0700" || return 1
   done
 }
+
+test_policy_class_of_longest_prefix_locked_and_phase_c() {
+  golden_fixture
+  mkdir -p "$WORK/vendor/keys" "$WORK/.git/hooks" "$HOME/other"
+  printf 'AI_SANDBOX_LOCKED_PATHS=~/src/app/vendor\nAI_SANDBOX_HIDE_PATHS=~/src/app/vendor/keys\n' >>"$CONF/config"
+  capture bash -c '
+    set -euo pipefail
+    . "$1/lib/config.sh"; . "$1/lib/policy.sh"
+    cfg_load; cfg_load_profile; policy_build /dev/null
+    for p in "$2/src/app" "$2/src/app/x/y" "$2/src/app/.git/hooks/pre-commit" "$2/src/app/vendor/lib" \
+             "$2/src/app/vendor/keys/k" "$2/other" /usr/bin "$2/src/application"; do
+      printf "%s\n" "$(policy_class_of "$p")"
+    done
+  ' _ "$REPO_ROOT" "$HOME"
+  assert_eq 0 "$RC" "$ERR" || return 1
+  assert_eq "rw
+rw
+locked
+locked
+hidden
+hidden
+ro
+hidden" "$OUT"
+}
