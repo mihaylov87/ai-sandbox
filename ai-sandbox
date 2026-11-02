@@ -49,11 +49,17 @@ ais_hook() { # name args...
 
 [ "${AI_SANDBOX-}" != 1 ] || ais_die 126 "already inside an ai-sandbox session (AI_SANDBOX=1); nesting is refused"
 
-case "$(uname -s)" in
+# _AIS_TEST_PLATFORM (linux|macos) is honoured only with the stub test backend.
+_ais_os=$(uname -s)
+if [ -n "${_AIS_TEST_BACKEND-}" ] && [ -n "${_AIS_TEST_PLATFORM-}" ]; then
+  case "$_AIS_TEST_PLATFORM" in linux) _ais_os=Linux ;; macos) _ais_os=Darwin ;; esac
+fi
+case "$_ais_os" in
   Linux) AIS_PLATFORM=linux _ais_backend=bwrap ;;
   Darwin) AIS_PLATFORM=macos _ais_backend=seatbelt ;;
-  *) ais_die 126 "unsupported platform: $(uname -s)" ;;
+  *) ais_die 126 "unsupported platform: $_ais_os" ;;
 esac
+unset _ais_os
 if [ -n "${_AIS_TEST_BACKEND-}" ]; then
   _ais_backend_file="$AIS_INSTALL_DIR/tests/unit/backend-${_AIS_TEST_BACKEND}.sh"
 else

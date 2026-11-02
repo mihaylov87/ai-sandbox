@@ -82,7 +82,9 @@ test_sessions_log_line_and_net_log_summary() {
 import glob, os, socket
 sock = glob.glob(os.path.expanduser("~/.local/state/ai-sandbox/sessions/*/proxy.sock"))[0]
 for host in ("blocked.example:443", "blocked.example:443", "other.example:443"):
-    s = socket.socket(socket.AF_UNIX); s.connect(sock)
+    # Relative name: the absolute path can exceed sun_path (104 bytes on macOS).
+    os.chdir(os.path.dirname(sock))
+    s = socket.socket(socket.AF_UNIX); s.connect(os.path.basename(sock))
     s.sendall(("CONNECT %s HTTP/1.1\r\n\r\n" % host).encode()); s.recv(4096); s.close()'
   assert_eq 0 "$RC" "$ERR" || return 1
   assert_contains "$ERR" "denied hosts" || return 1

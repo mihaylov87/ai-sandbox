@@ -13,7 +13,7 @@ net_fixture() {
 child_report='d=$(ls -d "$HOME"/.local/state/ai-sandbox/sessions/*/ | head -n 1)
   [ -S "$d/proxy.sock" ] && echo sock
   [ -f "$d/allow" ] && echo allow
-  pgrep -f "ai-sandbox-net (proxy|watchdog)" -a | sed -n "s/.*ai-sandbox-net \(proxy\|watchdog\).*/\1/p" | sort -u'
+  ps -A -o args= | sed -n -E "s/.*ai-sandbox-net (proxy|watchdog) .*/\1/p" | sort -u'
 
 test_allowlist_mode_starts_proxy_on_session_socket() {
   net_fixture

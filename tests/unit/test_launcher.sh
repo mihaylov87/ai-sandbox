@@ -58,7 +58,8 @@ test_sighup_to_launcher_is_forwarded_to_child() {
 test_ctrl_c_reaches_child_and_launcher_cleans_up() {
   launcher_fixture
   # SIGINT to the whole process group, as the terminal sends it.
-  capture setsid -w bash -c 'trap : INT; "$1" -- sleep 5 & p=$!; sleep 0.5; kill -INT -$$; wait $p' _ "$LAUNCHER"
+  # A new session (setsid -w, portable to macOS), so the group holds only this test.
+  capture python3 -I -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' bash -c 'trap : INT; "$1" -- sleep 5 & p=$!; sleep 0.5; kill -INT -$$; wait $p' _ "$LAUNCHER"
   assert_eq 130 "$RC" "$ERR" || return 1
   # Non-zero child exit keeps the session dir (spec §14).
   assert_eq 1 "$(session_dirs | wc -l | tr -d ' ')"

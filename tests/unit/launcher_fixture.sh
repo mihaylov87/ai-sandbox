@@ -2,7 +2,8 @@
 #
 # Copies the launcher, lib/ and the stub backend into a mode-0755 install dir under a
 # fake HOME (the checkout itself may be group-writable, which the launcher refuses),
-# writes a minimal config and an empty "stub" profile, and selects the stub backend.
+# writes a minimal config and an empty "stub" profile, and selects the stub backend and
+# the Linux platform (_AIS_TEST_PLATFORM; a test may set macos).
 
 launcher_fixture() {
   mk_tmp
@@ -25,7 +26,12 @@ launcher_fixture() {
   for v in $(compgen -v AI_SANDBOX_); do unset "$v"; done
   unset AI_SANDBOX
   export _AIS_TEST_BACKEND=stub
+  # Launcher tests expect Linux behaviour unless a test selects macos.
+  export _AIS_TEST_PLATFORM=linux
   LAUNCHER=$INSTALL/ai-sandbox
+  # Start from a hidden directory, so the child runs in the work dir (as from a checkout
+  # under /home on Linux; on macOS the caller's cwd might be visible).
+  cd "$HOME"
 }
 
 # Directories currently in the sessions dir, one per line.

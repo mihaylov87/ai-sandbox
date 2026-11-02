@@ -71,6 +71,12 @@ test_missing_docker_sockets_are_not_masked() {
 }
 
 test_command_argv_has_env_chdir_init_and_redacted_secrets() {
+  # backend_command looks bwrap up on PATH; give a host without it (macOS) a stand-in.
+  if ! command -v bwrap >/dev/null 2>&1; then
+    mk_tmp
+    mkdir -p "$TMP/fakebin" && printf '#!/bin/sh\nexit 0\n' >"$TMP/fakebin/bwrap" && chmod +x "$TMP/fakebin/bwrap"
+    PATH=$TMP/fakebin:$PATH
+  fi
   bw_compile '' '
     AIS_ENV_K=(HOME TOKEN) AIS_ENV_V=(/home/u sekrit-VALUE) AIS_ENV_SECRET=(0 1)
     backend_command "$SESSION" /w/app -- claude --flag "a b"
