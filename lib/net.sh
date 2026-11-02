@@ -74,31 +74,45 @@ net_prepare() {
   return 0
 }
 
-net_start() {
-  local fifo="$AIS_SESSION_DIR/net.ready" errf="$AIS_SESSION_DIR/net.err" line= rc kill_pgid=0
+# net_launch starts the helper early (right after the session dir exists) so its start-up
+# overlaps with building the policy; net_wait then waits for the proxy's READY line (at most
+# 5 s) before the policy is compiled. The watchdog is not waited for: it listens on nothing,
+# and on Linux bwrap's --die-with-parent covers a launcher that dies.
+AIS_NET_FIFO_FD=
+
+net_launch() {
+  local fifo="$AIS_SESSION_DIR/net.ready" errf="$AIS_SESSION_DIR/net.err" kill_pgid=0 listen
   net_prepare
   [ "$AI_SANDBOX_NET" = open ] && ais_warn "network is open (AI_SANDBOX_NET=open): egress is not restricted"
   [ -x "$AIS_INSTALL_DIR/ai-sandbox-net" ] || ais_die 126 "ai-sandbox-net not found in $AIS_INSTALL_DIR"
   [ -n "${AIS_KILL_PGID-}" ] && kill_pgid=$AIS_KILL_PGID
-  mkfifo -m 0600 "$fifo"
   if _net_needs_proxy; then
     net_write_allow "$AIS_SESSION_DIR/allow"
-    local listen
     if [ "$AIS_PLATFORM" = linux ]; then listen="unix:$AIS_PROXY_SOCK"; else listen="tcp:127.0.0.1:0"; fi
-    "$AIS_PYTHON" -I "$AIS_INSTALL_DIR/ai-sandbox-net" proxy --listen "$listen" \
+    mkfifo -m 0600 "$fifo"
+    "$AIS_PYTHON" -I -S "$AIS_INSTALL_DIR/ai-sandbox-net" proxy --listen "$listen" \
       --allow-file "$AIS_SESSION_DIR/allow" --host-ports "$AI_SANDBOX_HOST_PORTS" \
       ${AI_SANDBOX_UPSTREAM_PROXY:+--upstream "$AI_SANDBOX_UPSTREAM_PROXY"} \
       --log "$AIS_SESSION_DIR/net.log" --watch-pid "$$" --kill-pgid "$kill_pgid" \
       </dev/null >"$fifo" 2>"$errf" &
+    AIS_NET_PID=$!
+    # Open the read end now (the helper holds the write end), so net_wait cannot block.
+    exec 4<"$fifo"
+    AIS_NET_FIFO_FD=4
+    rm -f "$fifo"
   else
-    "$AIS_PYTHON" -I "$AIS_INSTALL_DIR/ai-sandbox-net" watchdog --watch-pid "$$" --kill-pgid "$kill_pgid" \
-      </dev/null >"$fifo" 2>"$errf" &
+    "$AIS_PYTHON" -I -S "$AIS_INSTALL_DIR/ai-sandbox-net" watchdog --watch-pid "$$" --kill-pgid "$kill_pgid" \
+      </dev/null >/dev/null 2>"$errf" &
+    AIS_NET_PID=$!
   fi
-  AIS_NET_PID=$!
-  exec 4<"$fifo"
+}
+
+net_wait() {
+  local line= rc errf="$AIS_SESSION_DIR/net.err"
+  [ -n "$AIS_NET_FIFO_FD" ] || return 0
   read -r -t 5 line <&4 || true
   exec 4<&-
-  rm -f "$fifo"
+  AIS_NET_FIFO_FD=
   case "$line" in
     "READY tcp:127.0.0.1:"*) AIS_PROXY_PORT=${line##*:} ;;
     READY*) ;;
@@ -113,6 +127,11 @@ net_start() {
   if [ -n "$AIS_PROXY_PORT" ] && [ "$AI_SANDBOX_NET" != open ] && declare -F env_proxy >/dev/null; then
     env_proxy "$AIS_PROXY_PORT"
   fi
+}
+
+net_start() {
+  net_launch
+  net_wait
 }
 
 net_stop() {

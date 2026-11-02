@@ -10,6 +10,7 @@
 gates_file() { printf '%s\n' "$HOME/.local/state/ai-sandbox/gates"; }
 
 gates_os_version() {
+  if [ -n "${_AIS_OS_VERSION-}" ]; then printf '%s\n' "$_AIS_OS_VERSION"; return; fi
   case "$AIS_PLATFORM" in
     macos) printf 'macOS-%s\n' "$(sw_vers -productVersion 2>/dev/null || uname -r)" ;;
     *) printf '%s-%s\n' "$(uname -s)" "$(uname -r)" ;;
@@ -34,6 +35,7 @@ gates_read() {
   [ "${_AIS_CHECK_NO_GATES-}" = 1 ] && return 0
   [ -f "$f" ] || return 0
   current=$(gates_os_version)
+  _AIS_OS_VERSION=$current
   while read -r g status date os; do
     case " $CFG_GATES " in *" $g "*) ;; *) continue ;; esac
     case "$status" in pass | fail) ;; *) continue ;; esac

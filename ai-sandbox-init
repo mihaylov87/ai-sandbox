@@ -25,7 +25,7 @@ start_bridge() { # extra bridge args...
   mkfifo -m 0600 "$fifo" || die 126 "cannot create $fifo"
   set -- "$@"
   for p in $ports; do set -- "$@" --forward "$p"; done
-  python3 -I "$here/ai-sandbox-net" bridge --upstream unix:/tmp/.ai-sandbox/proxy.sock "$@" >"$fifo" &
+  python3 -I -S "$here/ai-sandbox-net" bridge --upstream unix:/tmp/.ai-sandbox/proxy.sock "$@" >"$fifo" &
   bridge_pid=$!
   # Read the READY line with a 3 s limit.
   ready=

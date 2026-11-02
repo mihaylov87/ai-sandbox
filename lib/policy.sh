@@ -10,13 +10,37 @@ _AIS_TAB=$(printf '\t')
 _AIS_NL='
 '
 
+# Hot paths avoid $(...) subshells and forks: these set _PRIO, _DEPTH, _REAL.
 _policy_prio() {
   case "$1" in
-    ro) echo 1 ;;
-    rw) echo 2 ;;
-    hidden) echo 3 ;;
-    locked) echo 4 ;;
+    ro) _PRIO=1 ;;
+    rw) _PRIO=2 ;;
+    hidden) _PRIO=3 ;;
+    locked) _PRIO=4 ;;
   esac
+}
+
+# Resolve symlinks of an existing path into _REAL. Directories are resolved with the
+# cd -P builtin (no fork); a file is resolved through its directory, and only a file that
+# is itself a symlink costs a realpath call.
+_policy_realpath() {
+  local p=$1 here=$PWD d b
+  if [ -d "$p" ]; then
+    cd -P -- "$p" 2>/dev/null || return 1
+    _REAL=$PWD
+  else
+    d=${p%/*} b=${p##*/}
+    [ -n "$d" ] || d=/
+    cd -P -- "$d" 2>/dev/null || return 1
+    if [ -L "$b" ]; then
+      _REAL=$(realpath "$b") || { cd -- "$here"; return 1; }
+    elif [ "$PWD" = / ]; then
+      _REAL=/$b
+    else
+      _REAL=$PWD/$b
+    fi
+  fi
+  cd -- "$here"
 }
 
 _policy_is_user_src() {
@@ -45,7 +69,8 @@ _policy_add() { # class source raw-path
     /*) ;;
     *) ais_die 125 "path '$3' from $src is not absolute" ;;
   esac
-  if [ -e "$p" ] && p=$(realpath "$p" 2>/dev/null); then
+  if [ -e "$p" ] && _policy_realpath "$p"; then
+    p=$_REAL
     _policy_check_chars "$p" "$src"
   else
     while [ "${#p}" -gt 1 ] && [ "${p%/}" != "$p" ]; do p=${p%/}; done
@@ -57,11 +82,13 @@ _policy_add() { # class source raw-path
   fi
   if [ -d "$p" ]; then kind=dir; else kind=file; fi
 
-  newprio=$(_policy_prio "$class")
+  _policy_prio "$class"
+  newprio=$_PRIO
   i=0
   while [ "$i" -lt "${#K_PATH[@]}" ]; do
     if [ "${K_PATH[$i]}" = "$p" ]; then
-      oldprio=$(_policy_prio "${K_CLASS[$i]}")
+      _policy_prio "${K_CLASS[$i]}"
+      oldprio=$_PRIO
       if [ "$newprio" -gt "$oldprio" ]; then
         _policy_is_user_src "${K_SRC[$i]}" &&
           ais_warn "$p from ${K_SRC[$i]} (${K_CLASS[$i]}) is overridden by $class from $src"
@@ -202,9 +229,9 @@ _policy_repos() {
 
 _policy_depth() {
   local slashes
-  [ "$1" = / ] && { echo 0; return; }
+  if [ "$1" = / ]; then _DEPTH=0; return; fi
   slashes=${1//[!\/]/}
-  echo "${#slashes}"
+  _DEPTH=${#slashes}
 }
 
 # Steps 7-8: order (phases A, B, C) and emit.
@@ -215,9 +242,12 @@ _policy_emit() { # file
   while [ "$i" -lt "${#K_PATH[@]}" ]; do
     p=${K_PATH[$i]} c=${K_CLASS[$i]}
     if [ "$c" = locked ]; then
-      b="$b$(_policy_depth "$p")$_AIS_TAB$p$_AIS_TAB${K_KIND[$i]}$_AIS_NL"
+      _policy_depth "$p"
+      b="$b$_DEPTH$_AIS_TAB$p$_AIS_TAB${K_KIND[$i]}$_AIS_NL"
     else
-      a="$a$(_policy_depth "$p")$_AIS_TAB$(_policy_prio "$c")$_AIS_TAB$p$_AIS_TAB$c$_AIS_TAB${K_KIND[$i]}$_AIS_NL"
+      _policy_depth "$p"
+      _policy_prio "$c"
+      a="$a$_DEPTH$_AIS_TAB$_PRIO$_AIS_TAB$p$_AIS_TAB$c$_AIS_TAB${K_KIND[$i]}$_AIS_NL"
     fi
     i=$((i + 1))
   done

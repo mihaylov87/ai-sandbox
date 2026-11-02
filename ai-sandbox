@@ -123,6 +123,10 @@ _ais_cleanup() {
 }
 trap _ais_cleanup EXIT
 
+# Step 7 begins early: the network helper starts now so that its start-up overlaps with
+# the policy build; net_wait below waits for it (run modes only).
+case "$CLI_MODE" in run | shell) ais_hook net_launch ;; esac
+
 # ---------------------------------------------------------------------------
 # Step 4: IR (and environment, WP5).
 
@@ -140,7 +144,7 @@ esac
 [ "$CLI_MODE" = check ] || ais_hook gates_check
 
 # Step 6 (rest): exit-report manifest (WP7).
-ais_hook exitreport_start
+case "$CLI_MODE" in run | shell) ais_hook exitreport_start ;; esac
 
 # ---------------------------------------------------------------------------
 # Step 8: compile the backend policy. Output-only modes stop here.
@@ -179,9 +183,10 @@ case "$CLI_MODE" in
     ;;
 esac
 
-# Step 7: network helper (proxy or watchdog; WP11), then compile against it.
-ais_hook net_start
+# Step 7: wait for the network helper (WP11), then compile against it.
+ais_hook net_wait
 backend_compile "$AIS_SESSION_DIR/policy.ir" "$AIS_SESSION_DIR"
+ais_hook exitreport_wait
 
 # ---------------------------------------------------------------------------
 # Step 9: run the child and supervise it.

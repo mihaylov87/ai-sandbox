@@ -128,8 +128,9 @@ env_build() {
 
   # Set by the launcher; these win over forwarded values.
   env_set HOME "$HOME"
-  env_set USER "$(id -un)"
-  env_set LOGNAME "$(id -un)"
+  d=$(id -un)
+  env_set USER "$d"
+  env_set LOGNAME "$d"
   env_set SHELL /bin/bash
   for d in "$HOME/.local/bin" "$HOME/bin" /opt/homebrew/bin /usr/local/bin /usr/bin /bin; do
     [ -d "$d" ] && path=${path:+$path:}$d

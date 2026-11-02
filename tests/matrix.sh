@@ -271,7 +271,36 @@ sys.exit(0)'
   fi
 
   _chk_h1
+  _chk_p1
   _chk_net_rows
+}
+
+# P1 (spec §13, R10): start-up to the harness exec, median of 5, under 200 ms on Linux and
+# 300 ms on macOS. The stand-in harness prints the time as soon as it runs (its own Python
+# start-up, about 10 ms, is counted too). Uses the configured network mode.
+_chk_p1() {
+  [ -z "$CHK_NET" ] || return 0
+  local limit=200 ms
+  [ "$AIS_PLATFORM" = macos ] && limit=300
+  ms=$(python3 -I -S - "$LAUNCHER" "$CHK_PROFILE" "$CHK_WORK_DIR" "$CHK_PROJECT" <<'PY'
+import subprocess, sys, time
+launcher, prof, work, project = sys.argv[1:5]
+cmd = [launcher, "-H", prof, "-w", work] + (["-p", project] if project else [])
+cmd += ["--", "python3", "-I", "-S", "-c", "import time; print(repr(time.time()))"]
+runs = []
+for _ in range(5):
+    t0 = time.time()
+    out = subprocess.run(cmd, capture_output=True, text=True,
+                         env=dict(__import__("os").environ, _AIS_NO_SECRETS="1")).stdout.strip()
+    try:
+        runs.append((float(out.splitlines()[-1]) - t0) * 1000)
+    except (ValueError, IndexError):
+        runs.append(float("inf"))
+print(int(sorted(runs)[2]) if sorted(runs)[2] != float("inf") else -1)
+PY
+)
+  hostrow P1 both - "start-up to the harness exec: median ${ms} ms (limit ${limit} ms)" -- \
+    sh -c '[ "$1" -ge 0 ] && [ "$1" -lt "$2" ]' _ "$ms" "$limit"
 }
 
 # H1 (spec §13): the real harness, with a real token, once per profile. Runs only when the

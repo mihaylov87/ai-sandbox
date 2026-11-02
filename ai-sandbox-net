@@ -13,18 +13,16 @@ nothing else there afterwards (pty relays the terminal, so it prints no READY li
 to stderr with exit status 1.
 """
 
-import argparse
-import ipaddress
-import json
 import os
-import re
 import select
 import signal
 import socket
 import sys
 import threading
 import time
-import urllib.parse
+
+# ipaddress, json, re and urllib.parse are imported where needed, so the bridge (started
+# on the sandbox's critical path) loads as little as possible (P1).
 
 CONNECT_TIMEOUT = 10
 IDLE_TIMEOUT = 600
@@ -33,7 +31,15 @@ HEADER_LIMIT = 65536
 WATCH_INTERVAL = 1.0
 KILL_GRACE = 5.0
 
-_LABEL = re.compile(r"^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$")
+_LABEL = None
+
+
+def _label_re():
+    global _LABEL
+    if _LABEL is None:
+        import re
+        _LABEL = re.compile(r"^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$")
+    return _LABEL
 
 
 def die(msg):
@@ -46,6 +52,7 @@ def die(msg):
 
 def _ip_literal(host):
     """Return the canonical string of an IP literal, or None."""
+    import ipaddress
     h = host.split("%", 1)[0]
     try:
         return str(ipaddress.ip_address(h))
@@ -75,7 +82,7 @@ def normalise_host(host):
     except UnicodeError:
         raise ValueError("invalid host name: %r" % host)
     for label in h.split("."):
-        if not _LABEL.match(label):
+        if not _label_re().match(label):
             raise ValueError("invalid host name: %r" % host)
     return h
 
@@ -174,18 +181,23 @@ class AllowList(object):
         return False
 
 
-_PRIVATE_NETS = [ipaddress.ip_network(n) for n in (
+_PRIVATE_NETS = (
     "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
     "192.168.0.0/16", "224.0.0.0/4", "255.255.255.255/32",
-    "::/128", "::1/128", "fe80::/10", "fc00::/7", "ff00::/8")]
+    "::/128", "::1/128", "fe80::/10", "fc00::/7", "ff00::/8")
+_PRIVATE = None
 
 
 def is_private(ip_text):
     """Loopback, link-local (incl. 169.254.169.254), RFC 1918, CGNAT, ULA, unspecified, multicast."""
+    import ipaddress
+    global _PRIVATE
+    if _PRIVATE is None:
+        _PRIVATE = [ipaddress.ip_network(n) for n in _PRIVATE_NETS]
     ip = ipaddress.ip_address(ip_text.split("%", 1)[0])
     if ip.version == 6 and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
-    return any(ip.version == n.version and ip in n for n in _PRIVATE_NETS)
+    return any(ip.version == n.version and ip in n for n in _PRIVATE)
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +401,7 @@ class Proxy(object):
         self.log_lock = threading.Lock()
 
     def log(self, rec):
+        import json
         rec["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         line = json.dumps(rec, sort_keys=True) + "\n"
         with self.log_lock:
@@ -425,6 +438,7 @@ class Proxy(object):
     @staticmethod
     def http_target(target, headers):
         """Plain HTTP: absolute-form URI or Host header. Returns (host, port, origin path)."""
+        import urllib.parse
         if target.lower().startswith("http://"):
             u = urllib.parse.urlsplit(target)
             hostport = u.netloc.rsplit("@", 1)[-1]
@@ -602,6 +616,7 @@ def cmd_proxy(args):
         die(str(ex))
     upstream = None
     if args.upstream:
+        import urllib.parse
         u = urllib.parse.urlsplit(args.upstream)
         if u.scheme != "http" or not u.hostname:
             die("--upstream must be an http://host[:port] URL")
@@ -770,45 +785,77 @@ def cmd_pty(args):
 
 # ---------------------------------------------------------------------------
 
+class _Args(object):
+    pass
+
+
+# name -> (type, default, repeatable, required) per subcommand; argparse is not used
+# because importing it costs more than the bridge's whole job at start-up.
+_OPTIONS = {
+    "proxy": {"listen": (str, None, False, True), "allow-file": (str, None, False, True),
+              "host-ports": (str, "", False, False), "upstream": (str, "", False, False),
+              "log": (str, None, False, True), "watch-pid": (int, 0, False, False),
+              "kill-pgid": (int, 0, False, False), "max-tunnels": (int, MAX_TUNNELS, False, False)},
+    "bridge": {"listen": (str, "", False, False), "upstream": (str, None, False, True),
+               "forward": (str, [], True, False)},
+    "watchdog": {"watch-pid": (int, None, False, True), "kill-pgid": (int, None, False, True),
+                 "grace": (float, KILL_GRACE, False, False)},
+}
+
+
+def parse_args(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        sys.stderr.write(__doc__)
+        sys.exit(0 if argv else 1)
+    cmd, rest = argv[0], argv[1:]
+    args = _Args()
+    args.cmd = cmd
+    if cmd == "pty":
+        args.command = rest
+        return args
+    spec = _OPTIONS.get(cmd)
+    if spec is None:
+        die("unknown subcommand %r (proxy, bridge, watchdog, pty)" % cmd)
+    for name, (typ, default, rep, _) in spec.items():
+        setattr(args, name.replace("-", "_"), list(default) if rep else default)
+    seen = set()
+    i = 0
+    while i < len(rest):
+        opt = rest[i]
+        if opt in ("-h", "--help"):
+            sys.stderr.write(__doc__)
+            sys.exit(0)
+        if not opt.startswith("--"):
+            die("%s: unexpected argument %r" % (cmd, opt))
+        name, eq, val = opt[2:].partition("=")
+        if name not in spec:
+            die("%s: unknown option --%s" % (cmd, name))
+        if not eq:
+            i += 1
+            if i >= len(rest):
+                die("%s: --%s needs a value" % (cmd, name))
+            val = rest[i]
+        typ, _, rep, _ = spec[name]
+        try:
+            v = typ(val)
+        except ValueError:
+            die("%s: invalid value for --%s: %r" % (cmd, name, val))
+        attr = name.replace("-", "_")
+        if rep:
+            getattr(args, attr).append(v)
+        else:
+            setattr(args, attr, v)
+        seen.add(name)
+        i += 1
+    for name, (_, _, _, required) in spec.items():
+        if required and name not in seen:
+            die("%s: --%s is required" % (cmd, name))
+    return args
+
+
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="ai-sandbox-net")
-    sub = p.add_subparsers(dest="cmd")
-
-    pp = sub.add_parser("proxy")
-    pp.add_argument("--listen", required=True)
-    pp.add_argument("--allow-file", required=True)
-    pp.add_argument("--host-ports", default="")
-    pp.add_argument("--upstream", default="")
-    pp.add_argument("--log", required=True)
-    pp.add_argument("--watch-pid", type=int, default=0)
-    pp.add_argument("--kill-pgid", type=int, default=0)
-    pp.add_argument("--max-tunnels", type=int, default=MAX_TUNNELS, help=argparse.SUPPRESS)
-
-    pb = sub.add_parser("bridge")
-    pb.add_argument("--listen", default="")
-    pb.add_argument("--upstream", required=True)
-    pb.add_argument("--forward", action="append", default=[])
-
-    pw = sub.add_parser("watchdog")
-    pw.add_argument("--watch-pid", type=int, required=True)
-    pw.add_argument("--kill-pgid", type=int, required=True)
-    pw.add_argument("--grace", type=float, default=KILL_GRACE, help=argparse.SUPPRESS)
-
-    pt = sub.add_parser("pty")
-    pt.add_argument("command", nargs=argparse.REMAINDER)
-
-    args = p.parse_args(argv)
-    if args.cmd == "proxy":
-        cmd_proxy(args)
-    elif args.cmd == "bridge":
-        cmd_bridge(args)
-    elif args.cmd == "watchdog":
-        cmd_watchdog(args)
-    elif args.cmd == "pty":
-        cmd_pty(args)
-    else:
-        p.print_usage(sys.stderr)
-        sys.exit(1)
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    {"proxy": cmd_proxy, "bridge": cmd_bridge, "watchdog": cmd_watchdog, "pty": cmd_pty}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -191,14 +191,23 @@ EOF
     case "$g" in /*) ;; *) g="$AIS_STATE_DIR/$g" ;; esac # profile entries: relative to the state dir
     always[${#always[@]}]=$g
   done
-  "$AIS_PYTHON" -I -c "$_EXITREPORT_PY" start "$AIS_SESSION_DIR/manifest.start" "$AIS_SESSION_DIR" \
-    "${#roots[@]}" ${roots[@]+"${roots[@]}"} ${always[@]+"${always[@]}"}
+  # In the background; exitreport_wait (right before the child starts) waits for it.
+  "$AIS_PYTHON" -I -S -c "$_EXITREPORT_PY" start "$AIS_SESSION_DIR/manifest.start" "$AIS_SESSION_DIR" \
+    "${#roots[@]}" ${roots[@]+"${roots[@]}"} ${always[@]+"${always[@]}"} &
+  _EXITREPORT_PID=$!
+}
+
+_EXITREPORT_PID=
+exitreport_wait() {
+  [ -n "$_EXITREPORT_PID" ] || return 0
+  wait "$_EXITREPORT_PID" || ais_die 126 "could not take the exit-report manifest"
+  _EXITREPORT_PID=
 }
 
 exitreport_finish() {
   local report
   if [ "$AI_SANDBOX_EXIT_REPORT" = 1 ] && [ -f "$AIS_SESSION_DIR/manifest.start" ]; then
-    report=$("$AIS_PYTHON" -I -c "$_EXITREPORT_PY" finish "$AIS_SESSION_DIR/manifest.start" "$AIS_SESSION_DIR")
+    report=$("$AIS_PYTHON" -I -S -c "$_EXITREPORT_PY" finish "$AIS_SESSION_DIR/manifest.start" "$AIS_SESSION_DIR")
     if [ -n "$report" ]; then
       {
         printf 'ai-sandbox: exit report: files that run automatically outside the sandbox changed;\n'
@@ -208,7 +217,7 @@ exitreport_finish() {
     fi
   fi
   if [ "$CLI_NET_LOG" = 1 ] && [ -f "$AIS_SESSION_DIR/net.log" ]; then
-    "$AIS_PYTHON" -I -c "$_EXITREPORT_PY" netlog "$AIS_SESSION_DIR/net.log" >&2
+    "$AIS_PYTHON" -I -S -c "$_EXITREPORT_PY" netlog "$AIS_SESSION_DIR/net.log" >&2
   fi
   return 0
 }
@@ -216,7 +225,7 @@ exitreport_finish() {
 sessionlog_append() { # child-exit-code
   local f="$HOME/.local/state/ai-sandbox/sessions.log" denied=0 flags=
   [ -f "$AIS_SESSION_DIR/net.log" ] &&
-    denied=$("$AIS_PYTHON" -I -c "$_EXITREPORT_PY" netlog-count "$AIS_SESSION_DIR/net.log")
+    denied=$("$AIS_PYTHON" -I -S -c "$_EXITREPORT_PY" netlog-count "$AIS_SESSION_DIR/net.log")
   [ "$AI_SANDBOX_NET" = open ] && flags="unsandboxed:net-open"
   [ "$AI_SANDBOX_DOCKER" = 1 ] && flags="${flags:+$flags,}unsandboxed:docker"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s%s\n' "${AIS_START_TS:-?}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \

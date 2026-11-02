@@ -438,11 +438,22 @@ profile_seed() {
   [ "${#PROFILE_LOCKED[@]}" -gt 0 ] || [ -n "$PROFILE_STATE_ENV" ] || return 0
   mkdir -p "$AIS_STATE_DIR"
   chmod 0700 "$AIS_STATE_DIR"
+  # Batched (one rm, at most one cp per seed root) to keep start-up short (P1).
+  local rm_list=() from_user=() from_inst=() nested=()
   for e in ${PROFILE_LOCKED[@]+"${PROFILE_LOCKED[@]}"}; do
     case "$e" in /* | *..*) ais_die 125 "profile $AI_SANDBOX_HARNESS: locked entry '$e' must be relative to the state dir" ;; esac
+    rm_list[${#rm_list[@]}]="$AIS_STATE_DIR/$e"
+    case "$e" in */*) nested[${#nested[@]}]=$e; continue ;; esac
+    if [ -e "$user/$e" ]; then from_user[${#from_user[@]}]="$user/$e"
+    elif [ -e "$inst/$e" ]; then from_inst[${#from_inst[@]}]="$inst/$e"
+    fi
+  done
+  [ "${#rm_list[@]}" -gt 0 ] && rm -rf "${rm_list[@]}"
+  [ "${#from_user[@]}" -gt 0 ] && cp -R "${from_user[@]}" "$AIS_STATE_DIR/"
+  [ "${#from_inst[@]}" -gt 0 ] && cp -R "${from_inst[@]}" "$AIS_STATE_DIR/"
+  for e in ${nested[@]+"${nested[@]}"}; do
     src=
     if [ -e "$user/$e" ]; then src="$user/$e"; elif [ -e "$inst/$e" ]; then src="$inst/$e"; fi
-    rm -rf "${AIS_STATE_DIR:?}/$e"
     if [ -n "$src" ]; then
       mkdir -p "$(dirname "$AIS_STATE_DIR/$e")"
       cp -R "$src" "$AIS_STATE_DIR/$e"
