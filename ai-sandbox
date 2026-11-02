@@ -126,7 +126,7 @@ trap _ais_cleanup EXIT
 # Step 4: IR (and environment, WP5).
 
 policy_build "$AIS_SESSION_DIR/policy.ir"
-[ "$CLI_MODE" = print-policy ] || ais_hook env_build
+case "$CLI_MODE" in print-policy | check) ;; *) ais_hook env_build ;; esac
 
 # Working directory inside: the caller's cwd if it is rw, ro or locked, else the work dir.
 AIS_CWD=$(pwd -P)
@@ -135,8 +135,8 @@ case "$(policy_class_of "$AIS_CWD")" in
   *) AIS_CWD=$POLICY_WORK_DIR ;;
 esac
 
-# Step 5: verification gates (WP10).
-ais_hook gates_check
+# Step 5: verification gates (WP10). --check measures them, so it does not apply them.
+[ "$CLI_MODE" = check ] || ais_hook gates_check
 
 # Step 6 (rest): exit-report manifest (WP7).
 ais_hook exitreport_start

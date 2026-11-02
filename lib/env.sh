@@ -90,6 +90,8 @@ _env_secret() { # var secret-name optional(0|1)
 
 env_secrets() {
   local e var name opt done_vars=" " v
+  # Matrix checks run a stub command and need no credentials (tests/matrix.sh).
+  [ "${_AIS_NO_SECRETS-}" = 1 ] && return 0
   for e in ${PROFILE_SECRETS[@]+"${PROFILE_SECRETS[@]}"}; do
     var=${e%%=*} name=${e#*=} opt=0
     case "$name" in *\?) name=${name%\?} opt=1 ;; esac
