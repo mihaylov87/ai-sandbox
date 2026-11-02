@@ -1,0 +1,52 @@
+#!/bin/sh
+# ai-sandbox-init — Linux in-sandbox init (spec §7). POSIX sh; runs as PID 2 under bwrap.
+# Usage: ai-sandbox-init <net-mode> <host-ports> -- <command> [args...]
+#
+# allowlist mode: start the bridge (127.0.0.1:3128 -> proxy socket, plus one listener per
+# host port) and wait for its READY line, at most 3 s, else exit 126. none mode with host
+# ports: bridge for the host ports only. Then exec the command; not on PATH: exit 127.
+
+mode=$1
+ports=$2
+shift 2
+[ "${1-}" = -- ] && shift
+here=$(dirname "$0")
+
+die() {
+  code=$1
+  shift
+  printf 'ai-sandbox-init: %s\n' "$*" >&2
+  exit "$code"
+}
+
+start_bridge() { # extra bridge args...
+  [ -x "$here/ai-sandbox-net" ] || die 126 "ai-sandbox-net not found next to $0"
+  fifo=/tmp/.ai-sandbox-bridge.$$
+  mkfifo -m 0600 "$fifo" || die 126 "cannot create $fifo"
+  set -- "$@"
+  for p in $ports; do set -- "$@" --forward "$p"; done
+  python3 -I "$here/ai-sandbox-net" bridge --upstream unix:/tmp/.ai-sandbox/proxy.sock "$@" >"$fifo" &
+  bridge_pid=$!
+  # Read the READY line with a 3 s limit.
+  ready=
+  (sleep 3; kill "$bridge_pid" 2>/dev/null) &
+  timer=$!
+  read -r ready <"$fifo" || true
+  kill "$timer" 2>/dev/null
+  rm -f "$fifo"
+  case "$ready" in
+    READY*) ;;
+    *) die 126 "network bridge did not start" ;;
+  esac
+}
+
+case "$mode" in
+  allowlist) start_bridge --listen 127.0.0.1:3128 ;;
+  none) [ -n "$ports" ] && start_bridge ;;
+  open) ;;
+  *) die 126 "unknown network mode '$mode'" ;;
+esac
+
+[ "$#" -gt 0 ] || die 127 "no command given"
+command -v "$1" >/dev/null 2>&1 || die 127 "command not found inside the sandbox: $1"
+exec "$@"

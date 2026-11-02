@@ -6,6 +6,7 @@
 matrix_fixture() { # rows
   launcher_fixture
   cp "$REPO_ROOT/tests/matrix.sh" "$INSTALL/tests/"
+  chmod go-w "$INSTALL/tests/matrix.sh"
   printf '%s\n' "$1" >"$TMP/rows.sh"
   export _AIS_MATRIX_ROWS=$TMP/rows.sh
 }

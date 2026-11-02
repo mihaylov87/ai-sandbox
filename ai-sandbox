@@ -158,14 +158,8 @@ case "$CLI_MODE" in
     ais_hook env_print
     printf 'cwd: %s\n' "$AIS_CWD"
     printf 'command:'
-    _ais_quoted=
-    for _ais_w in "${AIS_CMD[@]}"; do
-      case "$_ais_w" in
-        *[!A-Za-z0-9_./:=@%+,-]* | '') _ais_quoted="$_ais_quoted '$(printf '%s' "$_ais_w" | sed "s/'/'\\\\''/g")'" ;;
-        *) _ais_quoted="$_ais_quoted $_ais_w" ;;
-      esac
-    done
-    printf '%s\n' "$_ais_quoted"
+    for _ais_w in "${AIS_CMD[@]}"; do printf ' %s' "$(ais_shquote "$_ais_w")"; done
+    printf '\n'
     exit 0
     ;;
   check)
@@ -211,9 +205,23 @@ except FileNotFoundError:
 except PermissionError:
     sys.stderr.write("ai-sandbox: permission denied: %s\n" % sys.argv[1]); sys.exit(126)'
 
+# AIS_RUN_ENV=0: the backend passes the environment itself (bwrap --clearenv/--setenv),
+# so the host-side process gets only what it needs to start.
+_ais_minimal_env() {
+  local v keep=
+  for v in PATH HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS; do
+    [ -n "${!v+x}" ] && keep="$keep $v"
+  done
+  for v in $(compgen -e); do
+    case " $keep " in *" $v "*) ;; *) export -n "$v" 2>/dev/null || true ;; esac
+  done
+  export _AIS_KEEP_ENV="$keep"
+}
+
 (
-  [ -n "$AIS_RUN_CWD" ] && cd "$AIS_RUN_CWD"
-  ais_hook env_apply
+  if [ -n "$AIS_RUN_CWD" ]; then cd "$AIS_RUN_CWD"; fi
+  if [ "${AIS_RUN_ENV:-1}" = 1 ]; then ais_hook env_apply; else _ais_minimal_env; fi
+  ais_hook backend_child_setup
   exec "$AIS_PYTHON" -I -S -c "$AIS_EXEC_PY" "${AIS_RUN_ARGV[@]}"
 ) <&0 &
 AIS_CHILD_PID=$!

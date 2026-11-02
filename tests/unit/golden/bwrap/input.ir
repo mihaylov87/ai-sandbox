@@ -1,0 +1,10 @@
+# ai-sandbox-ir 1
+# platform=linux harness=claude work=/w/app
+hidden	dir	/home
+hidden	dir	/home/u
+hidden	file	/w/app/.netrc
+ro	file	/home/u/.gitconfig
+rw	dir	/w/app
+rw	dir	/w/my dir
+locked	dir	/w/app/.git/hooks
+hidden	dir	/w/app/.git/hooks/sub

@@ -11,6 +11,14 @@ ais_die() { # code message...
   exit "$code"
 }
 
+# Quote a word for display: bare when it is plainly safe, otherwise in single quotes.
+ais_shquote() {
+  case "$1" in
+    *[!A-Za-z0-9_./:=@%+,-]* | '') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 # Resolve an existing path through symlinks; print it unchanged if it is missing.
 # Strips trailing slashes (keeps "/").
 ais_resolve_maybe() {
