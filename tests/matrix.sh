@@ -142,7 +142,7 @@ _chk_make_repo() {
   rm -rf "$CHK_WORK_DIR/.ai-sandbox-check"
   mkdir -p "$CHK_REPO" && git init -q "$CHK_REPO" && mkdir -p "$CHK_REPO/.git/hooks" "$CHK_REPO/.git/info"
 }
-trap 'rm -f "$CHK_ERRF"; [ -n "$CHK_REPO" ] && rm -rf "$CHK_WORK_DIR/.ai-sandbox-check"' EXIT
+trap 'rm -f "$CHK_ERRF"; [ -n "$CHK_REPO" ] && rm -rf "$CHK_WORK_DIR/.ai-sandbox-check"; [ -n "$CHK_SRV_PID" ] && kill "$CHK_SRV_PID" 2>/dev/null' EXIT
 
 # ---------------------------------------------------------------------------
 # Rows (spec §13). macOS-only rows: WP3. N rows: WP11. I9: WP12. H1: WP6. P1: WP8.
@@ -245,10 +245,84 @@ matrix_rows() {
 
   row E1 both - allowed "environment contains only the allowed set" --raw -- \
     python3 -I -c 'import os,sys; sys.exit(0 if " ".join(sorted(os.environ)) == sys.argv[1] else 1)' "$(_chk_expected_env)"
+
+  _chk_net_rows
+}
+
+# Expected result for the current network mode: _chk_mode <allowlist> <none> <open>
+_chk_mode() {
+  case "$CHK_NET" in allowlist) echo "$1" ;; none) echo "$2" ;; open) echo "$3" ;; esac
+}
+
+# N rows (spec §13), once per network mode. The allowlist column is the spec's table;
+# none and open follow from §9 (none: no egress but host ports and local servers work;
+# open: unfiltered).
+_chk_net_rows() {
+  [ -n "$CHK_NET" ] || return 0
+  local get noproxy tcp lan dns srv g3=- inet
+  get='import sys,urllib.request; urllib.request.urlopen(sys.argv[1], timeout=15)'
+  noproxy='import sys,urllib.request; urllib.request.build_opener(urllib.request.ProxyHandler({})).open(sys.argv[1], timeout=15)'
+  tcp='import socket,sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 5).close()'
+  lan='import sys,urllib.request
+for u in sys.argv[1:]:
+    try:
+        urllib.request.urlopen(u, timeout=8)
+        sys.exit(0)
+    except Exception:
+        pass
+sys.exit(1)'
+  dns='import socket,sys; socket.getaddrinfo(sys.argv[1], 443)'
+  srv='import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(1); socket.create_connection(s.getsockname(), 5).close()'
+  [ "$AIS_PLATFORM" = macos ] && g3=G3
+
+  if [ "$CHK_INET" = 1 ]; then
+    row N1 both - "$(_chk_mode allowed denied allowed)" "HTTPS to an allowlisted host" \
+      --allow-host example.com --raw -- python3 -I -c "$get" https://example.com/
+    row N3 both - "$(_chk_mode denied denied allowed)" "HTTPS to an allowlisted host bypassing the proxy" \
+      --allow-host example.com --raw -- python3 -I -c "$noproxy" https://example.com/
+  else
+    row N1 both - skip:"the host cannot reach https://example.com" "HTTPS to an allowlisted host" -- true
+    row N3 both - skip:"the host cannot reach https://example.com" "HTTPS bypassing the proxy" -- true
+  fi
+  row N2 both - "$(_chk_mode denied denied "$([ "$CHK_INET" = 1 ] && echo allowed || echo skip:no-internet)")" \
+    "HTTPS to a host that is not listed" --raw -- python3 -I -c "$get" https://example.com/
+  row N4 both - "$(_chk_mode denied denied allowed)" "host localhost port that is not listed" \
+    --raw -- python3 -I -c "$tcp" "$CHK_SRV_PORT"
+  row N5 both - allowed "listed host port" --host-port "$CHK_SRV_PORT" --raw -- python3 -I -c "$tcp" "$CHK_SRV_PORT"
+  row N6 both - "$(_chk_mode denied denied skip:"open mode does not filter")" \
+    "CONNECT to a LAN address and to 169.254.169.254 (even when listed)" \
+    --allow-host 192.168.1.1 --allow-host 169.254.169.254:80 --raw -- \
+    python3 -I -c "$lan" https://192.168.1.1/ http://169.254.169.254/
+  row N7 both "$g3" "$(_chk_mode denied denied "$([ "$CHK_INET" = 1 ] && echo allowed || echo skip:no-internet)")" \
+    "resolve example.com directly" --raw -- python3 -I -c "$dns" example.com
+  row N8 linux - allowed "start a server on a localhost port and connect to it" --raw -- python3 -I -c "$srv"
+}
+
+# Host-side TCP server for N4/N5 (accepts and closes), and an internet probe for N1-N3.
+CHK_SRV_PID= CHK_SRV_PORT=0 CHK_INET=0
+_chk_start_host_server() {
+  local f
+  f=$(mktemp)
+  python3 -I -c 'import socket,sys
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 0)); s.listen(16)
+print(s.getsockname()[1], flush=True)
+while True:
+    c, _ = s.accept(); c.close()' >"$f" &
+  CHK_SRV_PID=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$f" ] && break; sleep 0.1; done
+  CHK_SRV_PORT=$(cat "$f")
+  rm -f "$f"
 }
 
 if [ -n "${_AIS_MATRIX_ROWS-}" ]; then
   matrix_rows() { . "$_AIS_MATRIX_ROWS"; }
+fi
+
+if [ -z "${_AIS_MATRIX_ROWS-}" ]; then
+  _chk_start_host_server
+  python3 -I -c 'import urllib.request; urllib.request.urlopen("https://example.com/", timeout=10)' \
+    >/dev/null 2>&1 && CHK_INET=1
 fi
 
 for prof in "$AIS_INSTALL_DIR"/profiles/*.sh; do

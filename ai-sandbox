@@ -145,14 +145,15 @@ ais_hook exitreport_start
 # Step 8: compile the backend policy. Output-only modes stop here.
 
 backend_preflight
-backend_compile "$AIS_SESSION_DIR/policy.ir" "$AIS_SESSION_DIR"
 
 case "$CLI_MODE" in
-  print-policy)
-    if [ "$CLI_IR" = 1 ]; then cat "$AIS_SESSION_DIR/policy.ir"; else backend_print "$AIS_SESSION_DIR"; fi
-    exit 0
-    ;;
-  dry-run)
+  print-policy | dry-run)
+    ais_hook net_prepare
+    backend_compile "$AIS_SESSION_DIR/policy.ir" "$AIS_SESSION_DIR"
+    if [ "$CLI_MODE" = print-policy ]; then
+      if [ "$CLI_IR" = 1 ]; then cat "$AIS_SESSION_DIR/policy.ir"; else backend_print "$AIS_SESSION_DIR"; fi
+      exit 0
+    fi
     printf '# policy\n'
     backend_print "$AIS_SESSION_DIR"
     printf '# environment\n'
@@ -170,8 +171,9 @@ case "$CLI_MODE" in
     ;;
 esac
 
-# Step 7: network helper (WP11).
+# Step 7: network helper (proxy or watchdog; WP11), then compile against it.
 ais_hook net_start
+backend_compile "$AIS_SESSION_DIR/policy.ir" "$AIS_SESSION_DIR"
 
 # ---------------------------------------------------------------------------
 # Step 9: run the child and supervise it.

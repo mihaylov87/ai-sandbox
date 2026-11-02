@@ -49,3 +49,77 @@ $entries
 EOF
   } >"$f"
 }
+
+# ---------------------------------------------------------------------------
+# Helper lifecycle (run sequence steps 7 and 10).
+#
+# allowlist mode, and none mode on Linux with host ports: ai-sandbox-net proxy (Linux on
+# $SESSION/proxy.sock, bound into the sandbox; macOS on tcp:127.0.0.1:0). Otherwise the
+# helper runs as watchdog only. Either way it exits when the launcher's PID is gone.
+
+AIS_NET_PID=
+AIS_PROXY_SOCK=
+AIS_PROXY_PORT=
+
+_net_needs_proxy() {
+  [ "$AI_SANDBOX_NET" = allowlist ] && return 0
+  [ "$AI_SANDBOX_NET" = none ] && [ "$AIS_PLATFORM" = linux ] && [ -n "$AI_SANDBOX_HOST_PORTS" ] && return 0
+  return 1
+}
+
+# Sets what the compiled policy refers to; used for output-only modes too.
+net_prepare() {
+  AIS_PROXY_SOCK=
+  if _net_needs_proxy && [ "$AIS_PLATFORM" = linux ]; then AIS_PROXY_SOCK="$AIS_SESSION_DIR/proxy.sock"; fi
+  return 0
+}
+
+net_start() {
+  local fifo="$AIS_SESSION_DIR/net.ready" errf="$AIS_SESSION_DIR/net.err" line= rc kill_pgid=0
+  net_prepare
+  [ "$AI_SANDBOX_NET" = open ] && ais_warn "network is open (AI_SANDBOX_NET=open): egress is not restricted"
+  [ -x "$AIS_INSTALL_DIR/ai-sandbox-net" ] || ais_die 126 "ai-sandbox-net not found in $AIS_INSTALL_DIR"
+  [ -n "${AIS_KILL_PGID-}" ] && kill_pgid=$AIS_KILL_PGID
+  mkfifo -m 0600 "$fifo"
+  if _net_needs_proxy; then
+    net_write_allow "$AIS_SESSION_DIR/allow"
+    local listen
+    if [ "$AIS_PLATFORM" = linux ]; then listen="unix:$AIS_PROXY_SOCK"; else listen="tcp:127.0.0.1:0"; fi
+    "$AIS_PYTHON" -I "$AIS_INSTALL_DIR/ai-sandbox-net" proxy --listen "$listen" \
+      --allow-file "$AIS_SESSION_DIR/allow" --host-ports "$AI_SANDBOX_HOST_PORTS" \
+      ${AI_SANDBOX_UPSTREAM_PROXY:+--upstream "$AI_SANDBOX_UPSTREAM_PROXY"} \
+      --log "$AIS_SESSION_DIR/net.log" --watch-pid "$$" --kill-pgid "$kill_pgid" \
+      </dev/null >"$fifo" 2>"$errf" &
+  else
+    "$AIS_PYTHON" -I "$AIS_INSTALL_DIR/ai-sandbox-net" watchdog --watch-pid "$$" --kill-pgid "$kill_pgid" \
+      </dev/null >"$fifo" 2>"$errf" &
+  fi
+  AIS_NET_PID=$!
+  exec 4<"$fifo"
+  read -r -t 5 line <&4 || true
+  exec 4<&-
+  rm -f "$fifo"
+  case "$line" in
+    "READY tcp:127.0.0.1:"*) AIS_PROXY_PORT=${line##*:} ;;
+    READY*) ;;
+    *)
+      kill "$AIS_NET_PID" 2>/dev/null || true
+      rc=126
+      grep -q 'allow file' "$errf" 2>/dev/null && rc=125
+      ais_die "$rc" "network helper did not start: $(cat "$errf" 2>/dev/null)"
+      ;;
+  esac
+  # macOS: the proxy port is known only now.
+  if [ -n "$AIS_PROXY_PORT" ] && [ "$AI_SANDBOX_NET" != open ] && declare -F env_proxy >/dev/null; then
+    env_proxy "$AIS_PROXY_PORT"
+  fi
+}
+
+net_stop() {
+  [ -n "$AIS_NET_PID" ] || return 0
+  kill "$AIS_NET_PID" 2>/dev/null || true
+  wait "$AIS_NET_PID" 2>/dev/null || true
+  AIS_NET_PID=
+  [ -n "$AIS_PROXY_SOCK" ] && rm -f "$AIS_PROXY_SOCK"
+  return 0
+}

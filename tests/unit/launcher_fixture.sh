@@ -13,7 +13,7 @@ launcher_fixture() {
   SESSIONS=$HOME/.local/state/ai-sandbox/sessions
   mkdir -p "$WORK" "$CONF/projects" "$INSTALL/lib" "$INSTALL/profiles" "$INSTALL/tests/unit"
   unset _AIS_NO_SECRETS _AIS_CHECK_NO_GATES _AIS_MATRIX_ROWS
-  cp "$REPO_ROOT/ai-sandbox" "$INSTALL/"
+  cp "$REPO_ROOT/ai-sandbox" "$REPO_ROOT/ai-sandbox-net" "$INSTALL/"
   cp "$REPO_ROOT"/lib/*.sh "$INSTALL/lib/"
   cp "$REPO_ROOT/tests/unit/backend-stub.sh" "$INSTALL/tests/unit/"
   : >"$INSTALL/profiles/stub.sh"

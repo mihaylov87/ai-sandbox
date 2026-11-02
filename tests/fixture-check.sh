@@ -9,7 +9,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd -P)
-keep=0 net=none stub=0
+keep=0 net=allowlist stub=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --keep) keep=1 ;;
