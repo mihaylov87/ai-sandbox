@@ -1,0 +1,36 @@
+# ai-sandbox global config: copy to ~/.config/ai-sandbox/config (mode 0600) and edit.
+# Bash syntax, sourced in a subshell with `set -u`; only AI_SANDBOX_* assignments count.
+# An unknown AI_SANDBOX_* name or an invalid value stops the launcher (exit 125).
+# Per-project overrides go in ~/.config/ai-sandbox/projects/<name>.conf.
+# Full reference: spec section 6.
+
+# Primary RW directory (required).
+AI_SANDBOX_WORK_DIR=~/src/app
+
+# Harness profile: copilot | claude | generic
+AI_SANDBOX_HARNESS=claude
+
+# Extra paths, colon-separated. A trailing "?" marks an optional RW path.
+AI_SANDBOX_RO_PATHS=~/.gitconfig:~/.ssh/known_hosts
+AI_SANDBOX_RW_PATHS=~/src/shared-lib?
+#AI_SANDBOX_HIDE_PATHS=
+#AI_SANDBOX_LOCKED_PATHS=
+
+# Network: allowlist (default) | none | open
+#AI_SANDBOX_NET=allowlist
+AI_SANDBOX_NET_PRESETS="github npm pypi"
+#AI_SANDBOX_NET_ALLOW="example.org *.example.net:8443"
+# Host localhost ports reachable inside, e.g. a local model server.
+# Never list services that act on your behalf without authentication.
+AI_SANDBOX_HOST_PORTS="11434"
+#AI_SANDBOX_UPSTREAM_PROXY=http://proxy.corp.example:3128
+
+# Credentials: a host command whose stdout becomes the variable inside.
+AI_SANDBOX_SECRET_CMD_CLAUDE_CODE_OAUTH_TOKEN="cat ~/.config/ai-sandbox/secrets/claude"
+
+#AI_SANDBOX_SSH_AGENT=0
+#AI_SANDBOX_PASS_ENV=
+#AI_SANDBOX_STATE=isolated
+#AI_SANDBOX_GIT_CONFIG=locked
+#AI_SANDBOX_EXIT_REPORT=1
+#AI_SANDBOX_LIMITS="MemoryMax=16G CPUQuota=400%"   # Linux only
