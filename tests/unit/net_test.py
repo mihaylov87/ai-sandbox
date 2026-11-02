@@ -20,6 +20,7 @@ import threading
 import time
 import unittest
 
+sys.dont_write_bytecode = True  # importing ai-sandbox-net must not leave __pycache__ in the install
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NET = os.path.join(ROOT, "ai-sandbox-net")
 
