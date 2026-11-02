@@ -152,7 +152,8 @@ case "$CLI_MODE" in
     ais_hook net_prepare
     backend_compile "$AIS_SESSION_DIR/policy.ir" "$AIS_SESSION_DIR"
     if [ "$CLI_MODE" = print-policy ]; then
-      if [ "$CLI_IR" = 1 ] && [ "$CLI_CMD_SET" = 1 ]; then
+      # Paths after --ir (without --) are explained; a command after -- is ignored.
+      if [ "$CLI_IR" = 1 ] && [ "$CLI_CMD_SET" = 1 ] && [ "$CLI_DASHDASH" = 0 ]; then
         for _ais_w in "${CLI_CMD[@]}"; do policy_explain "$_ais_w"; done
       elif [ "$CLI_IR" = 1 ]; then
         cat "$AIS_SESSION_DIR/policy.ir"

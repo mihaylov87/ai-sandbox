@@ -268,7 +268,7 @@ cli_parse() {
   CLI_MODE=run CLI_IR=0 CLI_KEEP_SESSION=0 CLI_NET_LOG=0 CLI_VERBOSE=0
   CLI_WORK_DIR= CLI_HARNESS= CLI_PROJECT= CLI_NET= CLI_SSH_AGENT=
   CLI_RW=() CLI_RO=() CLI_HIDE=() CLI_ALLOW_HOST=() CLI_HOST_PORT=()
-  CLI_CMD=() CLI_CMD_SET=0
+  CLI_CMD=() CLI_CMD_SET=0 CLI_DASHDASH=0
   local opt val takes
   while [ "$#" -gt 0 ]; do
     opt=$1 val=
@@ -311,7 +311,7 @@ cli_parse() {
         ;;
       --)
         shift
-        CLI_CMD=("$@") CLI_CMD_SET=1
+        CLI_CMD=("$@") CLI_CMD_SET=1 CLI_DASHDASH=1
         break
         ;;
       -*) ais_die 125 "unknown option $opt (see --help)" ;;
