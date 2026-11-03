@@ -82,9 +82,26 @@ check_run() {
   for m in ${POLICY_MISSING[@]+"${POLICY_MISSING[@]}"}; do
     printf 'NOTE missing %s path skipped: %s\n' "${m%% *}" "${m#* }"
   done
-  AIS_INSTALL_DIR=$AIS_INSTALL_DIR AIS_PLATFORM=$AIS_PLATFORM CHK_WORK_DIR=$POLICY_WORK_DIR \
-    CHK_PROJECT=$CLI_PROJECT CHK_HOME=$HOME CHK_RO_PATHS=$AI_SANDBOX_RO_PATHS \
-    CHK_TEST_RO_DIR=$AI_SANDBOX_TEST_RO_DIR CHK_TEST_RW_DIR=$AI_SANDBOX_TEST_RW_DIR \
-    CHK_STATE=$AI_SANDBOX_STATE CHK_HOST_SSH_SOCK=${SSH_AUTH_SOCK-} \
-    bash "$AIS_INSTALL_DIR/tests/matrix.sh"
+  # The AI_SANDBOX_* variables of the calling environment are a config source (spec §6),
+  # but cfg_load re-applied them unexported; hand them on, so that the rows' launcher runs
+  # build their sandboxes from the same config.
+  (
+    _gates_export_env
+    AIS_INSTALL_DIR=$AIS_INSTALL_DIR AIS_PLATFORM=$AIS_PLATFORM CHK_WORK_DIR=$POLICY_WORK_DIR \
+      CHK_PROJECT=$CLI_PROJECT CHK_HOME=$HOME CHK_RO_PATHS=$AI_SANDBOX_RO_PATHS \
+      CHK_TEST_RO_DIR=$AI_SANDBOX_TEST_RO_DIR CHK_TEST_RW_DIR=$AI_SANDBOX_TEST_RW_DIR \
+      CHK_STATE=$AI_SANDBOX_STATE CHK_HOST_SSH_SOCK=${SSH_AUTH_SOCK-} \
+      bash "$AIS_INSTALL_DIR/tests/matrix.sh"
+  )
+}
+
+# In check_run's subshell: export the calling environment's AI_SANDBOX_* values again.
+_gates_export_env() {
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    eval "export ${line%%=*}=${line#*=}"
+  done <<EOF
+${CFG_ENV_LINES-}
+EOF
 }

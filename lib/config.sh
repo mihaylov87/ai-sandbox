@@ -366,6 +366,7 @@ cfg_load() {
   # 5. Snapshot the calling environment before defaults overwrite it.
   env_lines=$(for v in $(compgen -v AI_SANDBOX_); do ais_q "${!v}"; printf '%s=%s\n' "$v" "$AIS_Q"; done)
   env_work=${AI_SANDBOX_WORK_DIR-}
+  CFG_ENV_LINES=$env_lines # kept for --check, whose launcher runs must see the same env
 
   cli_parse "$@"
   cfg_unset_all
