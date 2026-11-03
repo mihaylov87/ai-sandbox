@@ -43,7 +43,10 @@ fi
 command -v python3 >/dev/null 2>&1 || fail "python3 (3.9+) is not installed"
 python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 9))' || fail "python3 is older than 3.9"
 command -v realpath >/dev/null 2>&1 || fail "realpath is not installed"
-if ! { command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q -- '-X'; }; then
+# The help text is captured first: with pipefail, `nc -h | grep -q` fails when grep exits
+# early and nc gets SIGPIPE (macOS nc prints a long help).
+nc_help=$(nc -h 2>&1 || true)
+if ! { command -v nc >/dev/null 2>&1 && case "$nc_help" in *-X*) true ;; *) false ;; esac; }; then
   warn "nc with -X not found: Git over SSH through the proxy will not work (spec section 9)"
 fi
 
