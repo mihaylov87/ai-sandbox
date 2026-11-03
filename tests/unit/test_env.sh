@@ -281,3 +281,19 @@ test_macos_dry_run_lists_proxy_variables_with_a_placeholder_port() {
   assert_contains "$OUT" "HTTPS_PROXY=http://127.0.0.1:PROXY_PORT" || return 1
   assert_contains "$OUT" "NODE_USE_ENV_PROXY=1"
 }
+
+test_herdr_agent_is_set_inside_a_herdr_pane() {
+  env_fixture
+  printf 'PROFILE_HERDR_AGENT=claude\n' >"$INSTALL/profiles/stub.sh"
+  run_env
+  assert_eq "" "$(env_value HERDR_AGENT)" "not in a herdr pane" || return 1
+  export HERDR_PANE_ID=p1
+  run_env
+  assert_eq 0 "$RC" "$ERR" || return 1
+  assert_eq claude "$(env_value HERDR_AGENT)" || return 1
+  assert_eq p1 "$(env_value HERDR_PANE_ID)" || return 1
+  # A value the caller set wins.
+  export HERDR_AGENT=other
+  run_env
+  assert_eq other "$(env_value HERDR_AGENT)"
+}

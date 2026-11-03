@@ -14,6 +14,7 @@ PROFILE_SECRETS=(CLAUDE_CODE_OAUTH_TOKEN=claude? ANTHROPIC_API_KEY=anthropic?)
 PROFILE_ENV=(DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1)
 PROFILE_PASS_ENV=(ANTHROPIC_BASE_URL ANTHROPIC_MODEL CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX)
 PROFILE_NET_ALLOW=(api.anthropic.com platform.claude.com) # platform: interactive start-up check (G10)
+PROFILE_HERDR_AGENT=claude   # herdr agent name, set as HERDR_AGENT inside a herdr pane
 profile_preflight() {   # exactly one credential
   [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || [ -n "${ANTHROPIC_API_KEY:-}" ]
 }

@@ -129,6 +129,12 @@ env_build() {
   for n in COLORTERM EDITOR VISUAL GH_HOST $(compgen -e | grep '^HERDR_' || true); do _env_forward "$n" default; done
   for n in ${PROFILE_PASS_ENV[@]+"${PROFILE_PASS_ENV[@]}"}; do _env_forward "$n" PROFILE_PASS_ENV; done
   for n in $AI_SANDBOX_PASS_ENV; do _env_forward "$n" AI_SANDBOX_PASS_ENV; done
+  # Inside a herdr pane (HERDR_PANE_ID set), herdr identifies the agent by the pane's
+  # foreground process, which is the sandboxed harness (or the pty relay); HERDR_AGENT in its
+  # environment names the agent for wrapped commands. A value set by the caller wins.
+  if [ -n "${HERDR_PANE_ID-}" ] && [ -n "${PROFILE_HERDR_AGENT-}" ] && [ -z "$(env_get HERDR_AGENT)" ]; then
+    env_set HERDR_AGENT "$PROFILE_HERDR_AGENT"
+  fi
 
   # Copied if set.
   for n in TERM LANG TZ $(compgen -e | grep '^LC_' || true); do

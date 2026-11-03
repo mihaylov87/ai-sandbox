@@ -14,6 +14,7 @@ PROFILE_ENV=(COPILOT_CACHE_HOME="$HOME/.cache/ai-sandbox/copilot" COPILOT_AUTO_U
 PROFILE_PASS_ENV=(COPILOT_API_URL COPILOT_PROVIDER_BASE_URL COPILOT_MODEL
                   COPILOT_GH_HOST COPILOT_ALLOW_ALL)
 PROFILE_NET_ALLOW=(api.githubcopilot.com '*.githubcopilot.com' api.github.com)
+PROFILE_HERDR_AGENT=copilot  # herdr agent name, set as HERDR_AGENT inside a herdr pane
 
 # Gate G6: config.json is locked unless Copilot was seen rewriting it at runtime; then it
 # stays RW and the exit report always diffs it.

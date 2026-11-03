@@ -424,7 +424,7 @@ cfg_load_profile() {
   [ -f "$f" ] || ais_die 125 "harness profile '$AI_SANDBOX_HARNESS' not found: $f"
   PROFILE_COMMAND=() PROFILE_STATE_ENV= PROFILE_STATE_DIR= PROFILE_RW=() PROFILE_RO=()
   PROFILE_LOCKED=() PROFILE_SECRETS=() PROFILE_ENV=() PROFILE_PASS_ENV=() PROFILE_NET_ALLOW=()
-  PROFILE_PATH_ADD=() PROFILE_ALLOW_USERNS=0
+  PROFILE_PATH_ADD=() PROFILE_ALLOW_USERNS=0 PROFILE_HERDR_AGENT=
   unset -f profile_preflight profile_seed_extra 2>/dev/null || true
   # Profiles may consult gate results (G6, G7, G9), so read them first.
   if declare -F gates_read >/dev/null; then gates_read; fi
