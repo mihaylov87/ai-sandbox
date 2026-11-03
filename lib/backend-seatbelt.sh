@@ -149,7 +149,8 @@ _sb_profile() { # ir-file
   printf '\n;; 1. writes: deny all, then devices and Darwin per-user dirs\n'
   printf '(deny file-write*)\n'
   printf '(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/ptmx")\n'
-  printf '  (literal "/dev/tty") (regex #"^/dev/ttys[0-9]+$") (literal "/dev/dtracehelper"))\n'
+  printf '  (literal "/dev/tty") (regex #"^/dev/ttys[0-9]+$") (literal "/dev/dtracehelper")\n'
+  printf '  (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))\n'
   d=
   for p in "$(_sb_darwin_dir TEMP)" "$(_sb_darwin_dir CACHE)"; do
     _sb_check "$p"

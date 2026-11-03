@@ -4,7 +4,8 @@
 ;; 1. writes: deny all, then devices and Darwin per-user dirs
 (deny file-write*)
 (allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/ptmx")
-  (literal "/dev/tty") (regex #"^/dev/ttys[0-9]+$") (literal "/dev/dtracehelper"))
+  (literal "/dev/tty") (regex #"^/dev/ttys[0-9]+$") (literal "/dev/dtracehelper")
+  (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))
 (allow file-write* (subpath "/private/var/folders/xy/abc/T") (subpath "/private/var/folders/xy/abc/C"))
 (allow file-write* (subpath "/private/tmp"))
 
