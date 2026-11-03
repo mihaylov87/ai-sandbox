@@ -6,7 +6,7 @@ macOS. The sandbox wraps the whole harness process, so built-in file tools, MCP 
 hooks and plugins all sit behind one boundary, and the kernel is the only gate.
 
 Status: v2 in development. Linux is implemented and tested (Ubuntu 25.04, bwrap 0.11);
-the macOS backend is not written yet.
+macOS is implemented and tested on macOS 27.2 (see [macOS specifics](#macos-specifics)).
 
 ## What the sandbox does
 
@@ -16,7 +16,7 @@ the macOS backend is not written yet.
 | Guardrails | The install dir, your config, the harness's guardrail files (settings, hooks, MCP config) and `.git/hooks`, `.git/config`, `.git/info` of every repo in a writable path are read-only |
 | Network | Outbound only through a host proxy that allows listed `host:port` pairs; clients that ignore proxy variables fail; LAN, cloud metadata and host loopback refused |
 | Environment | Starts empty; only listed variables cross; credentials only as scoped tokens you provide |
-| Processes | Own PID, IPC, UTS and network namespaces; nested user namespaces and inner sandboxes refused; Docker, containerd and Podman sockets masked |
+| Processes | Linux: own PID, IPC, UTS and network namespaces; nested user namespaces and inner sandboxes refused; Docker, containerd and Podman sockets masked. macOS: signals only within the sandbox; keychain, clipboard, LaunchServices and AppleEvents denied; Unix sockets unreachable except the SSH agent when forwarded |
 | After the session | An exit report lists changed files that run automatically outside (`.envrc`, `.vscode/tasks.json`, `Makefile`, new executables, symlinks pointing out, new repos) |
 
 Not protected: kernel or sandbox escapes, secrets you deliberately give the harness, and
@@ -126,12 +126,38 @@ are copied at every start from `~/.config/ai-sandbox/seed/<harness>/`, falling b
 defaults in `seeds/`, and are read-only inside. Edit your seeds on the host; the agent
 cannot change them, and guardrail files it creates do not survive to the next session.
 
+## macOS specifics
+
+The Seatbelt backend runs the harness under `/usr/bin/sandbox-exec` with a generated
+profile (`profile.sb` in the session dir). There are no mount namespaces, so paths inside
+are the host paths, and hiding is done with read denies. Differences from Linux:
+
+- Hidden paths fail with `Operation not permitted` instead of looking empty. Git treats
+  that as fatal for `~/.gitconfig`, so when it is hidden the launcher sets
+  `GIT_CONFIG_GLOBAL=/dev/null`; list `~/.gitconfig` in `AI_SANDBOX_RO_PATHS` to use yours.
+- `/private/tmp` is shared with the host (`TMPDIR` points into the session dir), and the
+  Darwin per-user temp and cache dirs are writable.
+- Setuid programs cannot be started inside, so `ps` and `crontab` fail.
+- Localhost: the agent reaches only the proxy and `--host-port` ports, including servers it
+  starts itself; a test suite serving on 8080 needs `--host-port 8080` (or
+  `AI_SANDBOX_LOCALHOST=shared`).
+- Gate results on macOS 27.2: G1 failed (`open -a` and AppleEvents get through the
+  LaunchServices and AppleEvent denies), so `open`, `osascript` and `launchctl` cannot be
+  started inside; G2 failed (TIOCSTI injection into the terminal works), so the harness runs
+  behind a host-side pty relay, or without a controlling terminal when stdin is not one.
+- The harness runs in its own process group with the terminal handed to it, so Ctrl-C
+  reaches it directly. Started in the background (`ai-sandbox ... &`), it stays in your
+  shell's job: when it touches the terminal the job stops, and `fg` resumes it.
+
 ## Debugging and tuning
 
 Each session leaves `~/.local/state/ai-sandbox/sessions/<id>/` (kept with `--keep-session`
-or when the harness exits non-zero) with `policy.ir`, `bwrap.argv`, `net.log` and the exit
-report, and appends a line to `~/.local/state/ai-sandbox/sessions.log`. Denied writes show
-up as `EROFS` or `EACCES`; hidden paths look empty or missing.
+or when the harness exits non-zero) with `policy.ir`, `bwrap.argv` or `profile.sb`,
+`net.log` and the exit report, and appends a line to `~/.local/state/ai-sandbox/sessions.log`.
+On Linux, denied writes show up as `EROFS` or `EACCES` and hidden paths look empty or
+missing. On macOS every denial is `Operation not permitted`; with `-v` the session also
+keeps `sandbox.log`, the Seatbelt denial stream (system-wide, so other apps' denials appear
+too; lines name the process and PID).
 
 Tuning loop: run once with `-v --net-log`, add the hosts and paths the task really needs to
 the project config, re-run `--check`.
