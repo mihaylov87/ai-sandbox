@@ -228,6 +228,7 @@ backend_command() { # session-dir cwd -- command...
   AIS_RUN_ENV=1
   AIS_RUN_PGRP=1 # own process group, foreground on the terminal
   AIS_RUN_ARGV=("$AIS_SANDBOX_EXEC" -f "$session/profile.sb" -- "$@")
+  [ "${CLI_VERBOSE:-0}" = 1 ] && _sb_log_start "$session"
   # G2 fallback, only when there is a controlling terminal to inject into.
   if [ "$SB_G2_PTY" = 1 ] && _sb_have_tty; then
     if _sb_stdin_tty; then
@@ -248,6 +249,33 @@ _sb_have_tty() {
   (: </dev/tty) 2>/dev/null
 }
 _sb_stdin_tty() { [ -t 0 ]; }
+
+# -v (spec §14): Seatbelt denials for the session go to $SESSION/sandbox.log. The stream
+# is system-wide (as the spec's predicate is); it is started before the child and waited
+# for (its header line, at most 3 s) so early denials are not missed.
+AIS_LOGSTREAM_PID=
+_sb_log_start() { # session-dir
+  local f="$1/sandbox.log" i=0
+  command -v log >/dev/null 2>&1 || { ais_warn "-v: 'log' not found; no sandbox.log"; return 0; }
+  log stream --style compact --predicate 'sender == "Sandbox"' </dev/null >"$f" 2>&1 &
+  AIS_LOGSTREAM_PID=$!
+  disown "$AIS_LOGSTREAM_PID" 2>/dev/null || true
+  while [ ! -s "$f" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+}
+
+# Called from the launcher's cleanup: stop the log stream (after a moment, so that the
+# last denials arrive) and keep the session dir, which holds the log. The stream is
+# system-wide, so denials of other sandboxed apps appear too; ours name the session's
+# processes (e.g. "cat(123) deny(1) file-read-data /Users/...").
+backend_cleanup() {
+  [ -n "$AIS_LOGSTREAM_PID" ] || return 0
+  sleep 0.3
+  kill "$AIS_LOGSTREAM_PID" 2>/dev/null || true
+  AIS_LOGSTREAM_PID=
+  AIS_KEEP_SESSION=1
+  ais_warn "sandbox log (all Seatbelt denials during the session): $AIS_SESSION_DIR/sandbox.log"
+  return 0
+}
 
 # Runs once the child is started: the watchdog ends its process group when the
 # launcher's PID is gone (SIGTERM, SIGKILL after 5 s).
