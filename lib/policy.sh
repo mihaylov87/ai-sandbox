@@ -338,12 +338,20 @@ policy_explain() { # path
   fi
 }
 
-# Warn when the command to run cannot be reached inside: its file is hidden, or a bare
-# name is found only through a hidden PATH dir (e.g. ~/.local/bin). Harnesses installed in
-# $HOME must have their real install path listed in AI_SANDBOX_RO_PATHS and be run by full
-# path; symlinks under hidden dirs are not recreated inside.
-policy_command_hint() { # command-word
+# The command to run inside (spec §6 "Harness binaries under $HOME"). Symlinks under hidden
+# dirs are not recreated inside, so a harness installed in $HOME needs its real install dir
+# listed in AI_SANDBOX_RO_PATHS.
+#
+# policy_command_resolve sets POLICY_CMD to the command word to run and returns 0, or sets
+# POLICY_CMD_ERR and returns 1 when the command cannot be reached inside (exit 127):
+# - a bare name found on the inside PATH through visible dirs runs unchanged;
+# - a bare name the host finds only through a hidden dir (a symlink such as
+#   ~/.local/bin/claude) runs by its real path when that is visible, i.e. listed RO;
+# - a real path that is hidden, or a name found nowhere, is unreachable.
+POLICY_CMD= POLICY_CMD_ERR=
+policy_command_resolve() { # command-word
   local c=$1 host dir real inside_path= i=0 d
+  POLICY_CMD=$c POLICY_CMD_ERR=
   case "$c" in
     */*) host=$c ;;
     *)
@@ -359,21 +367,25 @@ policy_command_hint() { # command-word
         fi
       done
       unset IFS
-      host=$(command -v -- "$c" 2>/dev/null) || return 0
+      if ! host=$(command -v -- "$c" 2>/dev/null); then
+        POLICY_CMD_ERR="command not found: $c (not on the PATH inside the sandbox: $inside_path)"
+        return 1
+      fi
       ;;
   esac
-  case "$host" in /*) ;; *) return 0 ;; esac
-  [ -e "$host" ] && _policy_realpath "$host" || return 0
+  case "$host" in /*) ;; *) return 0 ;; esac # a shell builtin or function: leave it to the shell
+  [ -e "$host" ] && _policy_realpath "$host" || return 0 # missing path: the exec reports it
   real=$_REAL
   if [ "$(policy_class_of "$real")" = hidden ]; then
-    ais_warn "$c resolves to $real, which is hidden in the sandbox; list its install dir in AI_SANDBOX_RO_PATHS and run it by its full path"
-    return 0
+    POLICY_CMD_ERR="$c resolves to $real, which is hidden in the sandbox; list its install dir in AI_SANDBOX_RO_PATHS"
+    return 1
   fi
   case "$c" in */*) return 0 ;; esac
   dir=${host%/*}
   _policy_realpath "$dir" || return 0
   if [ "$(policy_class_of "$_REAL")" = hidden ]; then
-    ais_warn "$c is found through $dir, but $dir is hidden in the sandbox; run it by its full path: $real"
+    # Found only through a hidden dir, but the real file is visible: run it by that path.
+    POLICY_CMD=$real
   fi
   return 0
 }

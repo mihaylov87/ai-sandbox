@@ -151,7 +151,23 @@ case "$CLI_MODE" in run | shell) ais_hook net_launch ;; esac
 policy_build "$AIS_SESSION_DIR/policy.ir"
 case "$CLI_MODE" in print-policy | check) ;; *) ais_hook env_build; profile_preflight_check ;; esac
 
-case "$CLI_MODE" in run | shell | dry-run) policy_command_hint "${AIS_CMD[0]}" ;; esac
+# The command must be reachable inside (spec §6): a harness found on the host only through
+# a hidden symlink (~/.local/bin/claude) runs by its real path if that is listed; otherwise
+# exit 127 now, rather than with a backend-specific error once the sandbox starts.
+case "$CLI_MODE" in
+  run | shell | dry-run)
+    if policy_command_resolve "${AIS_CMD[0]}"; then
+      if [ "$POLICY_CMD" != "${AIS_CMD[0]}" ]; then
+        [ "$CLI_VERBOSE" = 1 ] && ais_warn "running ${AIS_CMD[0]} by its real path: $POLICY_CMD"
+        AIS_CMD[0]=$POLICY_CMD
+      fi
+    elif [ "$CLI_MODE" = dry-run ]; then
+      ais_warn "$POLICY_CMD_ERR"
+    else
+      ais_die 127 "$POLICY_CMD_ERR"
+    fi
+    ;;
+esac
 
 # Working directory inside: the caller's cwd if it is rw, ro or locked, else the work dir.
 AIS_CWD=$(pwd -P)
