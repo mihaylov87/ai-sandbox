@@ -377,6 +377,7 @@ for u in sys.argv[1:]:
 sys.exit(1)'
   dns='import socket,sys; socket.getaddrinfo(sys.argv[1], 443)'
   srv='import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(1); socket.create_connection(s.getsockname(), 5).close()'
+  srv_port='import socket,sys; s=socket.socket(); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); socket.create_connection(s.getsockname(), 5).close()'
   [ "$AIS_PLATFORM" = macos ] && g3=G3
 
   if [ "$CHK_INET" = 1 ]; then
@@ -400,10 +401,15 @@ sys.exit(1)'
   row N7 both "$g3" "$(_chk_mode denied denied "$([ "$CHK_INET" = 1 ] && echo allowed || echo skip:no-internet)")" \
     "resolve example.com directly" --raw -- python3 -I -c "$dns" example.com
   row N8 linux - allowed "start a server on a localhost port and connect to it" --raw -- python3 -I -c "$srv"
+  # macOS (spec §8 Localhost): only listed ports; the server binds a free port listed here.
+  row N8 macos - allowed "start a server on a listed localhost port and connect to it" \
+    --host-port "$CHK_FREE_PORT" --raw -- python3 -I -c "$srv_port" "$CHK_FREE_PORT"
+  row N8 macos - "$(_chk_mode denied denied allowed)" "connect to an own server on a port that is not listed" \
+    --raw -- python3 -I -c "$srv"
 }
 
 # Host-side TCP server for N4/N5 (accepts and closes), and an internet probe for N1-N3.
-CHK_SRV_PID= CHK_SRV_PORT=0 CHK_INET=0
+CHK_SRV_PID= CHK_SRV_PORT=0 CHK_FREE_PORT=0 CHK_INET=0
 _chk_start_host_server() {
   local f
   f=$(mktemp)
@@ -417,6 +423,8 @@ while True:
   for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$f" ] && break; sleep 0.1; done
   CHK_SRV_PORT=$(cat "$f")
   rm -f "$f"
+  # A port that is free now, for N8 on macOS.
+  CHK_FREE_PORT=$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 }
 
 if [ -n "${_AIS_MATRIX_ROWS-}" ]; then
