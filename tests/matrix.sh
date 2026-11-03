@@ -137,6 +137,23 @@ _chk_expected_env() {
     sed -n '/^# environment$/,/^cwd: /p' | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'
 }
 
+# A sibling of the work dir that the policy hides (for F4). The first entry next to the
+# work dir may be exposed on purpose, e.g. the install dir in ~/src/ai-sandbox next to
+# ~/src/project (locked, so readable), so the launcher is asked for each candidate's class.
+_chk_hidden_sibling() { # work-dir
+  local parent e n=0
+  parent=$(dirname "$1")
+  for e in $(ls -A "$parent" 2>/dev/null | grep -vx "$(basename "$1")"); do
+    n=$((n + 1))
+    [ "$n" -le 5 ] || break
+    case "$("$LAUNCHER" -H "$CHK_PROFILE" -w "$CHK_WORK_DIR" ${CHK_PROJECT:+-p "$CHK_PROJECT"} \
+      --print-policy --ir "$parent/$e" 2>/dev/null)" in
+      *": hidden "*) printf '%s\n' "$parent/$e"; return 0 ;;
+    esac
+  done
+  return 0
+}
+
 _chk_split() { # colon-list -> lines
   printf '%s\n' "$1" | tr ':' '\n' | sed '/^$/d; s/?$//'
 }
@@ -183,7 +200,7 @@ matrix_rows() {
   found=0
   for f in "$h"/.ssh/id_* "$h/.aws/credentials" "$h/Library/Keychains" \
            $(ls -A "$h/.cache" 2>/dev/null | grep -vx ai-sandbox | head -n 1 | sed "s|^|$h/.cache/|") \
-           $(ls -A "$(dirname "$w")" 2>/dev/null | grep -vx "$(basename "$w")" | head -n 1 | sed "s|^|$(dirname "$w")/|"); do
+           $(_chk_hidden_sibling "$w"); do
     [ -e "$f" ] || continue
     found=1
     row F4 both - denied "read $f" -- sh -c 'cat "$1" || ls "$1"' _ "$f"
