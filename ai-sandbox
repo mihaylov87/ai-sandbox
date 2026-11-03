@@ -235,19 +235,26 @@ if env.get("_AIS_FG") == "1":
     # Own process group (pgid = this pid, which the launcher knows as $!); take the terminal
     # if the launcher had it, so that terminal signals reach the child directly. Done here
     # rather than with bash job control (set -m), which races setpgid and prints job notices.
+    # The controlling terminal is checked, not stdin: with stdin redirected, a child that
+    # opens /dev/tty (a password prompt, TIOCSTI) from a background group would be stopped
+    # by SIGTTOU/SIGTTIN, and the launcher would wait for it forever.
+    tty = -1
     fg = False
     try:
-        fg = os.isatty(0) and os.tcgetpgrp(0) == os.getpgrp()
+        tty = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+        fg = os.tcgetpgrp(tty) == os.getpgrp()
     except OSError:
         pass
     os.setpgid(0, 0)
     if fg:
         signal.signal(signal.SIGTTOU, signal.SIG_IGN)
         try:
-            os.tcsetpgrp(0, os.getpgrp())
+            os.tcsetpgrp(tty, os.getpgrp())
         except OSError:
             pass
         signal.signal(signal.SIGTTOU, signal.SIG_DFL)
+    if tty >= 0:
+        os.close(tty)
 keep = env.get("_AIS_KEEP_ENV")
 if keep is not None:
     env = dict((k, env[k]) for k in keep.split() if k in env)
@@ -294,12 +301,13 @@ AIS_CHILD_RC=$_ais_rc
 
 # Own process group: if the terminal still belongs to the child's (now empty) group, give
 # it back to the launcher's group, so that a calling script can use the terminal again.
-if [ "${AIS_RUN_PGRP:-0}" = 1 ] && [ -t 0 ]; then
+if [ "${AIS_RUN_PGRP:-0}" = 1 ] && (: </dev/tty) 2>/dev/null; then
   "$AIS_PYTHON" -I -S -c 'import os,signal,sys
 signal.signal(signal.SIGTTOU, signal.SIG_IGN)
 try:
-    if os.tcgetpgrp(0) == int(sys.argv[1]):
-        os.tcsetpgrp(0, os.getpgrp())
+    t = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+    if os.tcgetpgrp(t) == int(sys.argv[1]):
+        os.tcsetpgrp(t, os.getpgrp())
 except OSError:
     pass' "$AIS_CHILD_PID" || true
 fi
