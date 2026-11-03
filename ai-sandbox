@@ -48,6 +48,8 @@ ais_hook() { # name args...
 #                                           terminal's foreground group)
 #   backend_child_setup                     optional; in the child right before the exec
 #   backend_spawned PID                     optional; after the child started
+#   backend_cleanup                         optional; at exit, before the session dir is
+#                                           kept or removed
 # Hooks other work packages may define (called only if defined): env_build, env_print,
 # env_apply (WP5); gates_check, check_run (WP10); exitreport_start, exitreport_finish,
 # sessionlog_append (WP7); net_start, net_stop (WP11); profile_preflight_check (WP6).
@@ -123,10 +125,12 @@ _ais_cleanup() {
   ais_hook net_stop || true
   # A backend's watchdog (macOS) must not outlive the child: its group ID could be reused.
   [ -n "${AIS_WATCHDOG_PID-}" ] && kill "$AIS_WATCHDOG_PID" 2>/dev/null
+  ais_hook backend_cleanup || true
   if [ -n "$AIS_CHILD_RC" ]; then
     ais_hook exitreport_finish || true
     ais_hook sessionlog_append "$AIS_CHILD_RC" || true
-    [ "$AIS_CHILD_RC" = 0 ] || AIS_KEEP_SESSION=1
+    # Kept after a failure (spec §14), except for --check's own runs (_AIS_CHECK_NO_KEEP).
+    [ "$AIS_CHILD_RC" = 0 ] || [ "${_AIS_CHECK_NO_KEEP-}" = 1 ] || AIS_KEEP_SESSION=1
   fi
   if [ "$AIS_KEEP_SESSION" = 1 ]; then
     [ "$CLI_VERBOSE" = 1 ] && ais_warn "session kept: $AIS_SESSION_DIR"

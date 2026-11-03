@@ -225,3 +225,12 @@ test_own_process_group_child_is_supervised_and_forwarded() {
   assert_eq 143 "$RC" "$ERR" || return 1
   assert_not_contains "$ERR" "Terminated" "no job notice"
 }
+
+test_check_runs_do_not_keep_failed_sessions() {
+  launcher_fixture
+  capture env _AIS_CHECK_NO_KEEP=1 "$LAUNCHER" -- false
+  assert_eq 1 "$RC" "$ERR" || return 1
+  assert_eq "" "$(session_dirs)" || return 1
+  capture env _AIS_CHECK_NO_KEEP=1 "$LAUNCHER" --keep-session -- false
+  assert_eq 1 "$(session_dirs | wc -l | tr -d ' ')"
+}

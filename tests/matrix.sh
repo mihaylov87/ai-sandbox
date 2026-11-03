@@ -26,7 +26,8 @@ CHK_PROFILE= CHK_NET=
 CHK_ERRF=$(mktemp)
 
 # Children: no secrets needed (stub command), and gates are measured, not applied.
-export _AIS_NO_SECRETS=1 _AIS_CHECK_NO_GATES=1
+# Rows that expect a denial exit non-zero; their session dirs are not kept.
+export _AIS_NO_SECRETS=1 _AIS_CHECK_NO_GATES=1 _AIS_CHECK_NO_KEEP=1
 
 _chk_gate() { # gate[,gate...] pass|fail
   local cur g
