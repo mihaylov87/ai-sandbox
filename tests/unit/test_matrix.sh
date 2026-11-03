@@ -108,3 +108,30 @@ row X1 both - allowed "ok" -- true'
   assert_eq 0 "$RC" "$OUT $ERR" || return 1
   assert_contains "$OUT" "PASS X1 [stub] ok"
 }
+
+test_p1_over_target_warns_and_does_not_fail() {
+  # Stand-in launchers: one that starts the harness after 0.3 s (over the 200 ms Linux
+  # target), one that never starts it (no measurement).
+  matrix_fixture '
+LAUNCHER=$FAKE_SLOW; _chk_p1
+CHK_PROFILE=broken; LAUNCHER=$FAKE_BROKEN; _chk_p1'
+  printf '#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done; shift; sleep 0.3; exec "$@"\n' >"$TMP/slow"
+  printf '#!/bin/sh\nexit 1\n' >"$TMP/broken"
+  chmod +x "$TMP/slow" "$TMP/broken"
+  capture env FAKE_SLOW="$TMP/slow" FAKE_BROKEN="$TMP/broken" "$LAUNCHER" --check
+  assert_eq 1 "$RC" "$OUT $ERR" || return 1
+  assert_contains "$OUT" "WARN P1 [stub] start-up to the harness exec: median 3" || return 1
+  assert_contains "$OUT" "(target 200 ms; R10 is a SHOULD)" || return 1
+  assert_contains "$OUT" "FAIL P1 [broken] start-up to the harness exec: median -1 ms" || return 1
+  assert_contains "$OUT" "0 passed, 1 failed, 0 skipped" || return 1
+  assert_contains "$OUT" "1 warning(s)"
+}
+
+test_check_rows_see_config_from_the_calling_environment() {
+  # Spec §6 source 5: AI_SANDBOX_* in the environment of `--check` apply to its rows too.
+  matrix_fixture '
+row Z1 both - allowed "network mode from the environment" -- sh -c "[ \"\$AI_SANDBOX_NET\" = open ]"'
+  capture env AI_SANDBOX_NET=open "$LAUNCHER" --check
+  assert_eq 0 "$RC" "$OUT $ERR" || return 1
+  assert_contains "$OUT" "PASS Z1 [stub] network mode from the environment"
+}

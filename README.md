@@ -27,7 +27,7 @@ outside. Running them inside, with `ai-sandbox --shell -c 'make test'`, is the s
 ## Requirements
 
 - Linux: unprivileged bubblewrap 0.8.0+ with user namespaces (Ubuntu 24.04+: setup installs
-  an AppArmor profile for `/usr/bin/bwrap` if needed). macOS: 14+ (target 15 and 26).
+  an AppArmor profile for `/usr/bin/bwrap` if needed). macOS: 14+ (tested on 27).
 - Bash 3.2+, Python 3.9+ (stdlib only), `realpath`; `nc` with `-X` for Git over SSH.
 
 ## Install

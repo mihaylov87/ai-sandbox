@@ -21,7 +21,7 @@ set -uo pipefail
 . "$AIS_INSTALL_DIR/lib/gates.sh"
 
 LAUNCHER="$AIS_INSTALL_DIR/ai-sandbox"
-CHK_PASS=0 CHK_FAIL=0 CHK_SKIP=0
+CHK_PASS=0 CHK_FAIL=0 CHK_SKIP=0 CHK_WARN=0
 CHK_PROFILE= CHK_NET=
 CHK_ERRF=$(mktemp)
 
@@ -349,6 +349,14 @@ for _ in range(5):
 print(int(sorted(runs)[2]) if sorted(runs)[2] != float("inf") else -1)
 PY
 )
+  # R10 is a SHOULD: over the target is a warning, not a failure. No measurement (the
+  # stand-in harness did not run) is still a failure.
+  if [ "$ms" -ge "$limit" ] 2>/dev/null; then
+    printf 'WARN P1 [%s] start-up to the harness exec: median %s ms (target %s ms; R10 is a SHOULD)\n' \
+      "$CHK_PROFILE" "$ms" "$limit"
+    CHK_WARN=$((CHK_WARN + 1))
+    return 0
+  fi
   hostrow P1 both - "start-up to the harness exec: median ${ms} ms (limit ${limit} ms)" -- \
     sh -c '[ "$1" -ge 0 ] && [ "$1" -lt "$2" ]' _ "$ms" "$limit"
 }
@@ -367,6 +375,23 @@ _chk_h1() {
     *) return 0 ;;
   esac
   bin=${prompt[0]}
+  # Run the harness by its real path: a symlink such as ~/.local/bin/claude is not
+  # recreated inside (spec §6), so the real install dir must be listed RO.
+  local real
+  real=$(command -v "$bin" 2>/dev/null) && real=$(realpath "$real" 2>/dev/null) || real=
+  if [ -z "$real" ]; then
+    row H1 both "$gates" skip:"$bin is not installed on the host" "harness smoke test" -- true
+    return 0
+  fi
+  case "$("$LAUNCHER" -H "$CHK_PROFILE" -w "$CHK_WORK_DIR" ${CHK_PROJECT:+-p "$CHK_PROJECT"} \
+    --print-policy --ir "$real" 2>/dev/null)" in
+    *": hidden "*)
+      row H1 both "$gates" skip:"$real is hidden inside; add its install dir ($(dirname "$real")) to AI_SANDBOX_RO_PATHS" \
+        "harness smoke test" -- true
+      return 0
+      ;;
+  esac
+  prompt[0]=$real
   if ! _AIS_NO_SECRETS=0 "$LAUNCHER" -H "$CHK_PROFILE" -w "$CHK_WORK_DIR" ${CHK_PROJECT:+-p "$CHK_PROJECT"} \
       --dry-run -- true >/dev/null 2>&1; then
     row H1 both "$gates" skip:"secrets of profile $CHK_PROFILE do not resolve; profile untested" "harness smoke test" -- true
@@ -474,4 +499,5 @@ for g in $CFG_GATES; do
 done
 
 printf '%d passed, %d failed, %d skipped\n' "$CHK_PASS" "$CHK_FAIL" "$CHK_SKIP"
+[ "$CHK_WARN" -eq 0 ] || printf '%d warning(s): targets that are a SHOULD were missed (see WARN lines)\n' "$CHK_WARN"
 [ "$CHK_FAIL" -eq 0 ]
