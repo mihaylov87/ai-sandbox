@@ -273,8 +273,13 @@ matrix_rows() {
   else
     row I10 both - skip:"no SSH agent on the host" "SSH agent usable when enabled" -- true
   fi
-  row I10 both - denied "SSH agent socket absent when disabled" -- \
-    sh -c '[ -n "$SSH_AUTH_SOCK" ] || [ -S /tmp/.ai-sandbox/ssh-agent.sock ] || { [ -n "$1" ] && [ -S "$1" ]; }' _ "$CHK_HOST_SSH_SOCK"
+  # macOS has no mount namespace: an agent socket in a visible path (launchd puts it under
+  # /private/tmp) stays visible, so there the check is that it cannot be reached.
+  row I10 both - denied "SSH agent socket absent (macOS: unreachable) when disabled" -- \
+    sh -c '[ -n "$SSH_AUTH_SOCK" ] && exit 0; [ -S /tmp/.ai-sandbox/ssh-agent.sock ] && exit 0
+           [ -n "$1" ] || exit 1
+           if [ "$2" = macos ]; then SSH_AUTH_SOCK=$1 ssh-add -l; [ $? -ne 2 ]; else [ -S "$1" ]; fi' \
+    _ "$CHK_HOST_SSH_SOCK" "$AIS_PLATFORM"
 
   # macOS itself adds __CF_USER_TEXT_ENCODING (uid and text encoding) to the child.
   row E1 both - allowed "environment contains only the allowed set" --raw -- \
