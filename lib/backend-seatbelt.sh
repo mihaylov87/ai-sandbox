@@ -225,7 +225,7 @@ backend_command() { # session-dir cwd -- command...
   fi
   AIS_RUN_CWD=$cwd
   AIS_RUN_ENV=1
-  AIS_RUN_PGRP=1 # own process group, foreground on the terminal (set -m)
+  AIS_RUN_PGRP=1 # own process group, foreground on the terminal
   AIS_RUN_ARGV=("$AIS_SANDBOX_EXEC" -f "$session/profile.sb" -- "$@")
 }
 
@@ -235,7 +235,7 @@ backend_spawned() { # child-pid (= its process group)
   "$AIS_PYTHON" -I -S "$AIS_INSTALL_DIR/ai-sandbox-net" watchdog --watch-pid "$$" --kill-pgid "$1" \
     </dev/null >/dev/null 2>>"$AIS_SESSION_DIR/net.err" &
   AIS_WATCHDOG_PID=$!
-  disown "$AIS_WATCHDOG_PID" 2>/dev/null || true # no job notice when the launcher stops it
+  disown "$AIS_WATCHDOG_PID" 2>/dev/null || true # no "Terminated" notice when it is stopped
 }
 
 # ---------------------------------------------------------------------------

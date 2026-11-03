@@ -228,14 +228,22 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 signal.signal(signal.SIGQUIT, signal.SIG_DFL)
 env = os.environ
 if env.get("_AIS_FG") == "1":
-    # Own process group (set -m): take the terminal so that it reaches the child directly.
+    # Own process group (pgid = this pid, which the launcher knows as $!); take the terminal
+    # if the launcher had it, so that terminal signals reach the child directly. Done here
+    # rather than with bash job control (set -m), which races setpgid and prints job notices.
+    fg = False
     try:
-        if os.isatty(0) and os.tcgetpgrp(0) == os.getpgid(os.getppid()):
-            signal.signal(signal.SIGTTOU, signal.SIG_IGN)
-            os.tcsetpgrp(0, os.getpgrp())
+        fg = os.isatty(0) and os.tcgetpgrp(0) == os.getpgrp()
     except OSError:
         pass
-    signal.signal(signal.SIGTTOU, signal.SIG_DFL)
+    os.setpgid(0, 0)
+    if fg:
+        signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+        try:
+            os.tcsetpgrp(0, os.getpgrp())
+        except OSError:
+            pass
+        signal.signal(signal.SIGTTOU, signal.SIG_DFL)
 keep = env.get("_AIS_KEEP_ENV")
 if keep is not None:
     env = dict((k, env[k]) for k in keep.split() if k in env)
@@ -259,9 +267,8 @@ _ais_minimal_env() {
   export _AIS_KEEP_ENV="$keep"
 }
 
-# AIS_RUN_PGRP=1 (macOS): the child is a job in its own process group (set -m), and takes
-# the terminal; bash takes it back when the group is gone.
-[ "${AIS_RUN_PGRP:-0}" = 1 ] && set -m
+# AIS_RUN_PGRP=1 (macOS): the child makes its own process group and takes the terminal in
+# the exec step; the launcher gives the terminal back after it exits.
 (
   if [ -n "$AIS_RUN_CWD" ]; then cd "$AIS_RUN_CWD"; fi
   if [ "${AIS_RUN_ENV:-1}" = 1 ]; then ais_hook env_apply; else _ais_minimal_env; fi
@@ -270,9 +277,6 @@ _ais_minimal_env() {
   exec "$AIS_PYTHON" -I -S -c "$AIS_EXEC_PY" "${AIS_RUN_ARGV[@]}"
 ) <&0 &
 AIS_CHILD_PID=$!
-# The job already has its own group; without job control bash prints no job notices
-# ("[1]+ Interrupt ...") when it ends.
-set +m
 ais_hook backend_spawned "$AIS_CHILD_PID"
 
 while :; do
