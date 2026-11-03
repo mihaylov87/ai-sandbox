@@ -272,3 +272,12 @@ test_macos_hidden_gitconfig_gets_an_empty_global_git_config() {
   run_env
   assert_eq "" "$(env_value GIT_CONFIG_GLOBAL)"
 }
+
+test_macos_dry_run_lists_proxy_variables_with_a_placeholder_port() {
+  env_fixture
+  export _AIS_TEST_PLATFORM=macos
+  capture "$LAUNCHER" --dry-run -- true
+  assert_eq 0 "$RC" "$ERR" || return 1
+  assert_contains "$OUT" "HTTPS_PROXY=http://127.0.0.1:PROXY_PORT" || return 1
+  assert_contains "$OUT" "NODE_USE_ENV_PROXY=1"
+}

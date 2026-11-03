@@ -71,6 +71,12 @@ _net_needs_proxy() {
 net_prepare() {
   AIS_PROXY_SOCK=
   if _net_needs_proxy && [ "$AIS_PLATFORM" = linux ]; then AIS_PROXY_SOCK="$AIS_SESSION_DIR/proxy.sock"; fi
+  # macOS: the proxy port is known only once the proxy runs (net_wait). Output-only modes
+  # show the proxy variables with a placeholder, so --dry-run lists every variable.
+  if _net_needs_proxy && [ "$AIS_PLATFORM" = macos ] && [ -z "$AIS_PROXY_PORT" ] &&
+    [ "$CLI_MODE" = dry-run ] && declare -F env_proxy >/dev/null; then
+    env_proxy PROXY_PORT
+  fi
   return 0
 }
 
