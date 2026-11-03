@@ -245,7 +245,12 @@ if env.get("_AIS_FG") == "1":
         fg = os.tcgetpgrp(tty) == os.getpgrp()
     except OSError:
         pass
-    os.setpgid(0, 0)
+    # A launcher that is a background job on its terminal keeps the child in its group (the
+    # job of the caller), so that job control in the calling shell (fg, kill %1) reaches the
+    # child; a child in a separate background group would stay stopped after fg. The
+    # watchdog then finds no group to end (accepted: the child is in the job of the caller).
+    if tty < 0 or fg:
+        os.setpgid(0, 0)
     if fg:
         signal.signal(signal.SIGTTOU, signal.SIG_IGN)
         try:
