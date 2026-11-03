@@ -144,3 +144,53 @@ test_generated_profiles_compile_with_sandbox_exec() {
     /usr/bin/sandbox-exec -f "$TMP/p.sb" /usr/bin/true || fail "profile does not compile: $setup" || return 1
   done
 }
+
+# G2 fallback argv; the controlling terminal and stdin checks are stubbed.
+sb_g2_run() { # have-tty(0|1) stdin-is-tty(0|1)
+  sb_compile '' "
+    printf '#!/bin/sh\nexit 0\n' >\"\$TMP/sbx\"; chmod +x \"\$TMP/sbx\"; AIS_SANDBOX_EXEC=\$TMP/sbx
+    AIS_PYTHON=/py; gate_fallback_G2
+    _sb_have_tty() { [ $1 = 1 ]; }
+    _sb_stdin_tty() { [ $2 = 1 ]; }
+    backend_command \"\$SESSION\" /w -- cmd
+    { printf '%s\n' \"pgrp=\$AIS_RUN_PGRP\"; printf 'run=%s\n' \"\${AIS_RUN_ARGV[@]}\"; } >\"\$TMP/run\""
+}
+
+test_g2_fallback_without_terminal_input_uses_a_new_session() {
+  sb_g2_run 1 0
+  assert_eq 0 "$RC" "$ERR" || return 1
+  local run
+  run=$(cat "$TMP/run")
+  assert_contains "$run" "pgrp=0" || return 1
+  assert_contains "$run" "os.setsid()" || return 1
+  assert_contains "$run" "run=$TMP/sbx" || return 1
+  assert_not_contains "$run" "ai-sandbox-net"
+}
+
+test_g2_fallback_with_terminal_input_runs_behind_the_pty_relay() {
+  sb_g2_run 1 1
+  assert_eq 0 "$RC" "$ERR" || return 1
+  assert_eq "pgrp=1
+run=/py
+run=-I
+run=-S
+run=/opt/ai-sandbox/ai-sandbox-net
+run=pty
+run=--
+run=$TMP/sbx
+run=-f
+run=$TMP/session/profile.sb
+run=--
+run=cmd" "$(cat "$TMP/run")"
+}
+
+test_g2_fallback_without_controlling_terminal_changes_nothing() {
+  sb_g2_run 0 0
+  assert_eq 0 "$RC" "$ERR" || return 1
+  assert_eq "pgrp=1
+run=$TMP/sbx
+run=-f
+run=$TMP/session/profile.sb
+run=--
+run=cmd" "$(cat "$TMP/run")"
+}

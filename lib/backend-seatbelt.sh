@@ -17,6 +17,7 @@ SB_G1_EXEC_DENY=0 # deny exec of launchctl, open, osascript
 SB_G4_SOCKET_FORM=path-literal
 SB_G4_SIGNAL=1
 SB_G5_SIDE_FILES=0 # also deny <file>.lock and <file>.tmp next to locked files
+SB_G2_PTY=0        # keep the child off the launcher's controlling terminal (TIOCSTI)
 
 _SB_TAB=$(printf '\t')
 _SB_NL='
@@ -227,7 +228,26 @@ backend_command() { # session-dir cwd -- command...
   AIS_RUN_ENV=1
   AIS_RUN_PGRP=1 # own process group, foreground on the terminal
   AIS_RUN_ARGV=("$AIS_SANDBOX_EXEC" -f "$session/profile.sb" -- "$@")
+  # G2 fallback, only when there is a controlling terminal to inject into.
+  if [ "$SB_G2_PTY" = 1 ] && _sb_have_tty; then
+    if _sb_stdin_tty; then
+      # Interactive: behind the host-side pty relay; the child's controlling terminal is the
+      # relay's pty, so TIOCSTI reaches only the child's own input.
+      AIS_RUN_ARGV=("$AIS_PYTHON" -I -S "$AIS_INSTALL_DIR/ai-sandbox-net" pty -- "${AIS_RUN_ARGV[@]}")
+    else
+      # Not interactive: a new session without a controlling terminal (/dev/tty fails), and
+      # stdout and stderr stay separate. setsid makes the child's pgid its PID, as before.
+      AIS_RUN_PGRP=0
+      AIS_RUN_ARGV=("$AIS_PYTHON" -I -S -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
+        "${AIS_RUN_ARGV[@]}")
+    fi
+  fi
 }
+
+_sb_have_tty() {
+  (: </dev/tty) 2>/dev/null
+}
+_sb_stdin_tty() { [ -t 0 ]; }
 
 # Runs once the child is started: the watchdog ends its process group when the
 # launcher's PID is gone (SIGTERM, SIGKILL after 5 s).
@@ -254,6 +274,11 @@ gate_fallback_G4() {
   "$AIS_SANDBOX_EXEC" -p '(version 1)(allow default)(deny signal)(allow signal (target same-sandbox))' \
     /usr/bin/true >/dev/null 2>&1 || SB_G4_SIGNAL=0
   return 0
+}
+
+# G2: TIOCSTI reaches the controlling terminal; run the child away from it.
+gate_fallback_G2() {
+  SB_G2_PTY=1
 }
 
 # G5: also deny creating <file>.lock and <file>.tmp next to each locked file.
