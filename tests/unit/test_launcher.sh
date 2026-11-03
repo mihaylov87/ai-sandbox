@@ -30,9 +30,12 @@ test_stdin_and_stdout_pass_through() {
 test_sigterm_to_launcher_is_forwarded_to_child() {
   launcher_fixture
   local pid rc
-  "$LAUNCHER" -- sh -c 'trap "exit 42" TERM; while :; do sleep 0.05; done' &
+  "$LAUNCHER" -- sh -c 'trap "exit 42" TERM; : >"$1"; while :; do sleep 0.05; done' _ "$TMP/started" &
   pid=$!
-  sleep 0.5
+  # Signal only once the child runs (and so the launcher's trap is set); a fixed delay
+  # raced the launcher's start-up on a loaded machine.
+  local i=0
+  while [ ! -e "$TMP/started" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
   kill -TERM "$pid"
   set +e
   wait "$pid"
@@ -44,9 +47,10 @@ test_sigterm_to_launcher_is_forwarded_to_child() {
 test_sighup_to_launcher_is_forwarded_to_child() {
   launcher_fixture
   local pid rc
-  "$LAUNCHER" -- sh -c 'trap "exit 43" HUP; while :; do sleep 0.05; done' &
+  "$LAUNCHER" -- sh -c 'trap "exit 43" HUP; : >"$1"; while :; do sleep 0.05; done' _ "$TMP/started" &
   pid=$!
-  sleep 0.5
+  local i=0
+  while [ ! -e "$TMP/started" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
   kill -HUP "$pid"
   set +e
   wait "$pid"
@@ -221,7 +225,9 @@ test_own_process_group_child_is_supervised_and_forwarded() {
   assert_eq True "$OUT" || return 1
   capture env _AIS_STUB_PGRP=1 "$LAUNCHER" -- sh -c 'exit 7'
   assert_eq 7 "$RC" "$ERR" || return 1
-  capture bash -c '_AIS_STUB_PGRP=1 "$1" -- sleep 5 & p=$!; sleep 0.7; kill -TERM $p; wait $p' _ "$LAUNCHER"
+  capture bash -c '_AIS_STUB_PGRP=1 "$1" -- sh -c ": >\"\$1\"; exec sleep 5" _ "$2" & p=$!
+    i=0; while [ ! -e "$2" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+    kill -TERM $p; wait $p' _ "$LAUNCHER" "$TMP/started"
   assert_eq 143 "$RC" "$ERR" || return 1
   assert_not_contains "$ERR" "Terminated" "no job notice"
 }
