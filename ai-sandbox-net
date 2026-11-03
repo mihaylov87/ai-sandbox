@@ -13,6 +13,7 @@ nothing else there afterwards (pty relays the terminal, so it prints no READY li
 to stderr with exit status 1.
 """
 
+import errno
 import os
 import select
 import signal
@@ -756,10 +757,20 @@ def cmd_pty(args):
     signal.signal(signal.SIGWINCH, copy_winsize)
     for s in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(s, forward)
+    def retry(fn, *a):
+        # termios calls are not retried on EINTR in Python 3.9; a relay started as a
+        # background job is stopped (SIGTTOU) inside them and continued by `fg`.
+        while True:
+            try:
+                return fn(*a)
+            except termios.error as ex:
+                if ex.args[0] != errno.EINTR:
+                    raise
+
     old = None
     if os.isatty(0):
-        old = termios.tcgetattr(0)
-        tty.setraw(0)
+        old = retry(termios.tcgetattr, 0)
+        retry(tty.setraw, 0)
     try:
         fds = [0, fd]
         while True:
@@ -783,7 +794,7 @@ def cmd_pty(args):
                     fds = [fd]
     finally:
         if old is not None:
-            termios.tcsetattr(0, termios.TCSADRAIN, old)
+            retry(termios.tcsetattr, 0, termios.TCSADRAIN, old)
     _, status = os.waitpid(pid, 0)
     if os.WIFSIGNALED(status):
         sys.exit(128 + os.WTERMSIG(status))
