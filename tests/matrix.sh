@@ -397,8 +397,12 @@ _chk_h1() {
     row H1 both "$gates" skip:"secrets of profile $CHK_PROFILE do not resolve; profile untested" "harness smoke test" -- true
     return 0
   fi
-  row H1 both "$gates" allowed "$bin --version" --with-secrets -- "$bin" --version
-  row H1 both "$gates" allowed "one prompt round trip" --with-secrets -- "${prompt[@]}"
+  # Both by the real path. The harness output goes to stderr, so a FAIL line shows its
+  # first lines (the usual wrapper discards it).
+  row H1 both "$gates" allowed "$bin --version" --with-secrets --raw -- \
+    sh -c '"$@" >&2; [ $? -eq 0 ]' _ "$real" --version
+  row H1 both "$gates" allowed "one prompt round trip" --with-secrets --raw -- \
+    sh -c '"$@" >&2; [ $? -eq 0 ]' _ "${prompt[@]}"
 }
 
 # Expected result for the current network mode: _chk_mode <allowlist> <none> <open>
