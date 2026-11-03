@@ -308,7 +308,16 @@ policy_class_of() { # resolved-path
 # --print-policy --ir PATH...: which entry decides a path's class (spec §14).
 policy_explain() { # path
   local p=$1 i k best=-1 bestlen=-1 lock=-1 locklen=-1 d
+  local rest=
+  # Resolve the deepest existing ancestor too (macOS: /tmp/new-file is /private/tmp/new-file).
+  while [ ! -e "$p" ] && [ "$p" != / ] && [ -n "$p" ]; do
+    rest="/${p##*/}$rest"
+    p=${p%/*}
+    [ -n "$p" ] || p=/
+  done
   if [ -e "$p" ]; then p=$(realpath "$p"); fi
+  p=${p%/}$rest
+  [ -n "$p" ] || p=/
   i=0
   while [ "$i" -lt "${#K_PATH[@]}" ]; do
     k=${K_PATH[$i]}

@@ -116,3 +116,13 @@ test_print_policy_ir_explains_a_path() {
   assert_contains "$OUT" "$HOME/.ssh/id_ed25519: hidden (hidden $HOME, from default)" || return 1
   assert_contains "$OUT" "/usr/bin/env: ro (base)"
 }
+
+test_print_policy_ir_explains_a_missing_path_below_a_symlink() {
+  report_fixture
+  # As /tmp -> /private/tmp on macOS: the IR holds the resolved path.
+  mkdir -p "$TMP/real/ro"
+  ln -s real "$TMP/link"
+  capture "$LAUNCHER" --ro "$TMP/link/ro" --print-policy --ir "$TMP/link/ro/new/file"
+  assert_eq 0 "$RC" "$ERR" || return 1
+  assert_eq "$TMP/link/ro/new/file: ro (ro $TMP/real/ro, from --ro)" "$OUT"
+}
