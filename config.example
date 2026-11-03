@@ -3,6 +3,8 @@
 # An unknown AI_SANDBOX_* name or an invalid value stops the launcher (exit 125).
 # Per-project overrides go in ~/.config/ai-sandbox/projects/<name>.conf.
 # Full reference: spec section 6.
+# Set each variable once: a later line replaces an earlier one (it does not add to it).
+# The values below are examples; delete or change the lines you do not need.
 
 # Primary RW directory (required).
 AI_SANDBOX_WORK_DIR=~/src/app
@@ -13,7 +15,8 @@ AI_SANDBOX_HARNESS=claude
 # AI_SANDBOX_RO_PATHS and give its full path here (symlinks are not recreated inside), e.g.
 #AI_SANDBOX_COMMAND="$HOME/.local/share/claude/versions/2.1.316 --dangerously-skip-permissions"
 
-# Extra paths, colon-separated. A trailing "?" marks an optional RW path.
+# Extra paths, colon-separated, all on one line. A trailing "?" marks an optional RW path.
+# A harness installed in the home goes here too, e.g. ~/.local/share/claude:~/.gitconfig:...
 AI_SANDBOX_RO_PATHS=~/.gitconfig:~/.ssh/known_hosts
 AI_SANDBOX_RW_PATHS=~/src/shared-lib?
 #AI_SANDBOX_HIDE_PATHS=
