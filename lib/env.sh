@@ -25,6 +25,15 @@ env_set() { # name value [secret]
 }
 
 # Names that never cross the boundary from the caller (spec §10).
+env_get() { # name -> value set so far (empty if none)
+  local i=0
+  while [ "$i" -lt "${#AIS_ENV_K[@]}" ]; do
+    if [ "${AIS_ENV_K[$i]}" = "$1" ]; then printf '%s\n' "${AIS_ENV_V[$i]}"; return 0; fi
+    i=$((i + 1))
+  done
+  return 0
+}
+
 env_is_never_forwarded() {
   case "$1" in
     SSH_AUTH_SOCK | DOCKER_HOST | DBUS_SESSION_BUS_ADDRESS | XDG_RUNTIME_DIR | DISPLAY | \
@@ -138,6 +147,13 @@ env_build() {
   for d in ${PROFILE_PATH_ADD[@]+"${PROFILE_PATH_ADD[@]}"}; do path=${path:+$path:}$d; done
   env_set PATH "$path"
   if [ "$AIS_PLATFORM" = macos ]; then env_set TMPDIR "$AIS_SESSION_DIR/tmp"; else env_set TMPDIR /tmp; fi
+  # macOS: a hidden ~/.gitconfig reads as EPERM, which git treats as fatal (on Linux the
+  # empty tmpfs gives ENOENT). With no global config git behaves as on Linux. A value
+  # forwarded through AI_SANDBOX_PASS_ENV wins.
+  if [ "$AIS_PLATFORM" = macos ] && [ -z "$(env_get GIT_CONFIG_GLOBAL)" ] &&
+    [ "$(policy_class_of "$HOME/.gitconfig")" = hidden ]; then
+    env_set GIT_CONFIG_GLOBAL /dev/null
+  fi
   mkdir -p "$HOME/.cache/ai-sandbox/cache/npm" "$HOME/.cache/ai-sandbox/cache/pip"
   env_set XDG_CACHE_HOME "$HOME/.cache/ai-sandbox/cache"
   env_set npm_config_cache "$HOME/.cache/ai-sandbox/cache/npm"

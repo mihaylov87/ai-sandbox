@@ -250,3 +250,25 @@ test_secret_never_in_argv_session_files_or_dry_run() {
   assert_not_contains "$OUT" "$SENTINEL" || return 1
   assert_contains "$OUT" "STUB_TOKEN=<redacted>"
 }
+
+test_macos_hidden_gitconfig_gets_an_empty_global_git_config() {
+  env_fixture
+  export _AIS_TEST_PLATFORM=macos
+  : >"$HOME/.gitconfig"
+  run_env
+  assert_eq 0 "$RC" "$ERR" || return 1
+  assert_eq /dev/null "$(env_value GIT_CONFIG_GLOBAL)" || return 1
+  # Listed RO: git reads it as usual.
+  run_env --ro "$HOME/.gitconfig"
+  assert_eq 0 "$RC" "$ERR" || return 1
+  assert_eq "" "$(env_value GIT_CONFIG_GLOBAL)" || return 1
+  # A forwarded value wins.
+  export GIT_CONFIG_GLOBAL=/etc/gitconfig.sandbox AI_SANDBOX_PASS_ENV=GIT_CONFIG_GLOBAL
+  run_env
+  assert_eq /etc/gitconfig.sandbox "$(env_value GIT_CONFIG_GLOBAL)" || return 1
+  # Linux: not set.
+  unset GIT_CONFIG_GLOBAL AI_SANDBOX_PASS_ENV
+  export _AIS_TEST_PLATFORM=linux
+  run_env
+  assert_eq "" "$(env_value GIT_CONFIG_GLOBAL)"
+}

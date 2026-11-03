@@ -151,6 +151,15 @@ _chk_make_repo() {
 }
 trap 'rm -f "$CHK_ERRF"; [ -n "$CHK_REPO" ] && rm -rf "$CHK_WORK_DIR/.ai-sandbox-check"; [ -n "$CHK_SRV_PID" ] && kill "$CHK_SRV_PID" 2>/dev/null' EXIT
 
+# Inside: run argv with a 10 s limit; exit 0 if it succeeded or timed out, 1 if it failed.
+_chk_timeout='import subprocess, sys
+try:
+    sys.exit(1 if subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode else 0)
+except subprocess.TimeoutExpired:
+    sys.exit(0)
+except OSError:
+    sys.exit(1)'
+
 # ---------------------------------------------------------------------------
 # Rows (spec §13). macOS-only rows: WP3. N rows: WP11. I9: WP12. H1: WP6. P1: WP8.
 matrix_rows() {
@@ -238,7 +247,22 @@ matrix_rows() {
   row I2 linux - denied "D-Bus session bus: org.freedesktop.secrets" -- sh -c \
     'dbus-send --session --print-reply --dest=org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.DBus.Peer.Ping ||
      dbus-send --bus="unix:path=/run/user/$(id -u)/bus" --print-reply --dest=org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.DBus.Peer.Ping'
+  # macOS IPC (WP3). I3: find-generic-password exits 44 ("not found") on the host as well,
+  # so show-keychain-info (0 on the host) is the row that can show the deny.
+  row I3 macos - denied "security find-generic-password -s x" -- security find-generic-password -s x
+  row I3 macos - denied "security show-keychain-info (default keychain)" -- security show-keychain-info
+  # I4: `tell app "Finder" to name` is answered locally without an AppleEvent, so the probe
+  # sends a real one. A run that does not finish in 10 s (waiting on an Automation prompt)
+  # was not refused by the sandbox, so it counts as allowed.
+  row I4 macos G1 denied "osascript sends an AppleEvent to Finder" --raw -- python3 -I -c "$_chk_timeout" \
+    osascript -e 'tell application "Finder" to count windows'
+  row I4 macos G1 denied "open -a TextEdit (hidden, in the background)" --raw -- python3 -I -c "$_chk_timeout" \
+    open -g -j -a TextEdit
+  row I5 macos - denied "pbpaste" -- pbpaste
   row I6 both G4 denied "kill -0 a host process" -- kill -0 "$$"
+  # Removes the job if the submit wrongly succeeds.
+  row I7 macos G1 denied "launchctl submit" -- \
+    sh -c 'l=ais.chk.$$; launchctl submit -l "$l" -- /usr/bin/true; r=$?; launchctl remove "$l" 2>/dev/null; exit $r'
   row I7 both - denied "write a crontab" -- sh -c 't=$(mktemp); crontab -l >"$t" 2>/dev/null; crontab "$t"; r=$?; rm -f "$t"; exit $r'
   row I8 linux - denied "nested bwrap" -- bwrap --ro-bind / / true
   row I8 linux - denied "unshare -U" -- unshare -U true
@@ -251,8 +275,11 @@ matrix_rows() {
   row I10 both - denied "SSH agent socket absent when disabled" -- \
     sh -c '[ -n "$SSH_AUTH_SOCK" ] || [ -S /tmp/.ai-sandbox/ssh-agent.sock ] || { [ -n "$1" ] && [ -S "$1" ]; }' _ "$CHK_HOST_SSH_SOCK"
 
+  # macOS itself adds __CF_USER_TEXT_ENCODING (uid and text encoding) to the child.
   row E1 both - allowed "environment contains only the allowed set" --raw -- \
-    python3 -I -c 'import os,sys; sys.exit(0 if " ".join(sorted(os.environ)) == sys.argv[1] else 1)' "$(_chk_expected_env)"
+    python3 -I -c 'import os,sys
+names = [n for n in os.environ if not (sys.platform == "darwin" and n == "__CF_USER_TEXT_ENCODING")]
+sys.exit(0 if " ".join(sorted(names)) == sys.argv[1] else 1)' "$(_chk_expected_env)"
 
   # I9: TIOCSTI pushes one space into the controlling terminal's input; allowed = injected.
   # Needs a controlling terminal on the host (run --check from a terminal).
